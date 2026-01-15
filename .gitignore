@@ -1,0 +1,58 @@
+# ======================
+# OS / Editor junk
+# ======================
+.DS_Store
+Thumbs.db
+
+.vscode/
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+*.code-workspace
+
+# ======================
+# Environment files
+# ======================
+.env
+
+# ======================
+# Python
+# ======================
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# ======================
+# .NET / C#
+# ======================
+bin/
+obj/
+
+# User-specific files
+*.user
+*.suo
+*.rsuser
+
+# Build logs
+msbuild.binlog
+
+# ======================
+# Test results
+# ======================
+TestResults/
+
+# ======================
+# Generated outputs
+# ======================
+examples/out/
+*.exe
+*.dll
+
+# ======================
+# Misc
+# ======================
+*.log
