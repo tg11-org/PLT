@@ -3,21 +3,19 @@ using PLT.CORE.Backends.Python;
 using PLT.CORE.Backends.C;
 using PLT.CORE.Backends.Tcl;
 using PLT.CORE.Frontends.Js;
+using PLT.CORE.Frontends.Python;
 
 
 static void Usage()
 {
     Console.WriteLine("Usage:");
-    Console.WriteLine("  plt --from js --to python <input.js> [-o out.py]");
-    Console.WriteLine("  plt --from js --to c <input.js> [-o out.c]");
-    Console.WriteLine("  plt --from js --to tcl <input.js> [-o out.tcl]");
+    Console.WriteLine("  plt --from <js|py> --to <python|c|tcl> <input> [-o out]");
     Console.WriteLine("  --print-ir      Print the IR before emitting output");
     Console.WriteLine();
     Console.WriteLine("Examples:");
     Console.WriteLine("  dotnet run --project .\\PLT.CLI\\ -- --from js --to python examples\\hello.js -o out.py");
-    Console.WriteLine("  dotnet run --project .\\PLT.CLI\\ -- --from js --to c examples\\hello.js -o out.c");
-    Console.WriteLine("  dotnet run --project .\\PLT.CLI\\ -- --from js --to tcl examples\\hello.js -o out.tcl");
-    Console.WriteLine("  dotnet run --project .\\PLT.CLI\\ -- --from js --to python examples\\hello.js --print-ir -o out.py");
+    Console.WriteLine("  dotnet run --project .\\PLT.CLI\\ -- --from py --to tcl script.py -o out.tcl");
+    Console.WriteLine("  dotnet run --project .\\PLT.CLI\\ -- --from py --to python script.py --print-ir");
 }
 
 string? from = null;
@@ -69,15 +67,20 @@ if (!File.Exists(inputPath))
     return;
 }
 
-// For now: only JS frontend, and only console.log("...") MVP.
-if (from != "js")
+// Parse based on frontend
+if (from != "js" && from != "py")
 {
-    Console.WriteLine($"Unsupported --from {from} (only 'js' supported for now)");
+    Console.WriteLine($"Unsupported --from {from} (supported: 'js', 'py')");
     return;
 }
 
 var source = File.ReadAllText(inputPath);
-var ir = MiniJsFrontend.ParseConsoleLogHelloWorld(source);
+var ir = from switch
+{
+    "js" => MiniJsFrontend.ParseConsoleLogHelloWorld(source),
+    "py" => PythonFrontend.Parse(source),
+    _ => throw new Exception($"Unknown frontend: {from}")
+};
 
 if (printIr)
 {

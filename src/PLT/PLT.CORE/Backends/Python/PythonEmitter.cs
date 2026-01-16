@@ -27,6 +27,74 @@ public sealed class PythonEmitter
                 sb.AppendLine();
                 break;
 
+            case VarAssignment v:
+                if (!string.IsNullOrWhiteSpace(v.LeadingComment))
+                    sb.AppendLine($"{pad}# {v.LeadingComment}");
+                sb.Append(pad);
+                sb.Append(v.VarName);
+                sb.Append(" = ");
+                EmitExpr(v.Value, sb);
+                sb.AppendLine();
+                break;
+
+            case IfStmt i:
+                if (!string.IsNullOrWhiteSpace(i.LeadingComment))
+                    sb.AppendLine($"{pad}# {i.LeadingComment}");
+                sb.Append(pad);
+                sb.Append("if ");
+                EmitExpr(i.Condition, sb);
+                sb.AppendLine(":");
+                foreach (var s in i.ThenBody)
+                    EmitStmt(s, sb, indent + 1);
+                if (i.ElseBody != null)
+                {
+                    sb.AppendLine($"{pad}else:");
+                    foreach (var s in i.ElseBody)
+                        EmitStmt(s, sb, indent + 1);
+                }
+                break;
+
+            case ForEachStmt f:
+                if (!string.IsNullOrWhiteSpace(f.LeadingComment))
+                    sb.AppendLine($"{pad}# {f.LeadingComment}");
+                sb.Append(pad);
+                sb.Append("for ");
+                sb.Append(f.LoopVar);
+                sb.Append(" in ");
+                EmitExpr(f.IterableExpr, sb);
+                sb.AppendLine(":");
+                foreach (var s in f.Body)
+                    EmitStmt(s, sb, indent + 1);
+                break;
+
+            case WhileStmt w:
+                if (!string.IsNullOrWhiteSpace(w.LeadingComment))
+                    sb.AppendLine($"{pad}# {w.LeadingComment}");
+                sb.Append(pad);
+                sb.Append("while ");
+                EmitExpr(w.Condition, sb);
+                sb.AppendLine(":");
+                foreach (var s in w.Body)
+                    EmitStmt(s, sb, indent + 1);
+                break;
+
+            case FunctionDefStmt f:
+                if (!string.IsNullOrWhiteSpace(f.LeadingComment))
+                    sb.AppendLine($"{pad}# {f.LeadingComment}");
+                sb.Append(pad);
+                sb.Append("def ");
+                sb.Append(f.FunctionName);
+                sb.Append("(");
+                for (int j = 0; j < f.Parameters.Count; j++)
+                {
+                    if (j > 0) sb.Append(", ");
+                    sb.Append(f.Parameters[j]);
+                }
+                sb.AppendLine("):");
+                foreach (var s in f.Body)
+                    EmitStmt(s, sb, indent + 1);
+                break;
+
             default:
                 throw new NotSupportedException($"Unsupported stmt: {stmt.GetType().Name}");
         }
@@ -48,6 +116,70 @@ public sealed class PythonEmitter
 
             case Literal l:
                 sb.Append(FormatLiteral(l.Value));
+                return;
+
+            case Variable v:
+                sb.Append(v.Name);
+                return;
+
+            case ListLiteral l:
+                sb.Append("[");
+                for (int j = 0; j < l.Elements.Count; j++)
+                {
+                    if (j > 0) sb.Append(", ");
+                    EmitExpr(l.Elements[j], sb);
+                }
+                sb.Append("]");
+                return;
+
+            case BinaryOp b:
+                EmitExpr(b.Left, sb);
+                sb.Append(" ");
+                sb.Append(b.Op);
+                sb.Append(" ");
+                EmitExpr(b.Right, sb);
+                return;
+
+            case UnaryOp u:
+                sb.Append(u.Op);
+                sb.Append(" ");
+                EmitExpr(u.Operand, sb);
+                return;
+
+            case FunctionCall f:
+                sb.Append(f.FunctionName);
+                sb.Append("(");
+                for (int j = 0; j < f.Args.Count; j++)
+                {
+                    if (j > 0) sb.Append(", ");
+                    EmitExpr(f.Args[j], sb);
+                }
+                sb.Append(")");
+                return;
+
+            case MethodCall m:
+                EmitExpr(m.Target, sb);
+                sb.Append(".");
+                sb.Append(m.MethodName);
+                sb.Append("(");
+                for (int j = 0; j < m.Args.Count; j++)
+                {
+                    if (j > 0) sb.Append(", ");
+                    EmitExpr(m.Args[j], sb);
+                }
+                sb.Append(")");
+                return;
+
+            case StringInterpolation s:
+                sb.Append("f\"");
+                foreach (var part in s.Parts)
+                {
+                    if (part is StringPartLiteral lit)
+                        sb.Append(EscapeString(lit.Value));
+                    else if (part is StringPartVariable var)
+                        sb.Append("{").Append(var.VarName).Append("}");
+                }
+                sb.Append("\"");
                 return;
 
             default:
