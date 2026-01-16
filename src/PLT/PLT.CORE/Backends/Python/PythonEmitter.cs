@@ -112,6 +112,37 @@ public sealed class PythonEmitter
                     EmitStmt(s, sb, indent + 1);
                 break;
 
+            case TryStmt t:
+                if (!string.IsNullOrWhiteSpace(t.LeadingComment))
+                    sb.AppendLine($"{pad}# {t.LeadingComment}");
+                sb.AppendLine($"{pad}try:");
+                foreach (var s in t.TryBody)
+                    EmitStmt(s, sb, indent + 1);
+                foreach (var (exceptionType, varName, body) in t.ExceptClauses)
+                {
+                    sb.Append($"{pad}except");
+                    if (!string.IsNullOrWhiteSpace(exceptionType))
+                    {
+                        sb.Append(" ");
+                        sb.Append(exceptionType);
+                        if (!string.IsNullOrWhiteSpace(varName))
+                        {
+                            sb.Append(" as ");
+                            sb.Append(varName);
+                        }
+                    }
+                    sb.AppendLine(":");
+                    foreach (var s in body)
+                        EmitStmt(s, sb, indent + 1);
+                }
+                if (t.FinallyBody != null)
+                {
+                    sb.AppendLine($"{pad}finally:");
+                    foreach (var s in t.FinallyBody)
+                        EmitStmt(s, sb, indent + 1);
+                }
+                break;
+
             default:
                 throw new NotSupportedException($"Unsupported stmt: {stmt.GetType().Name}");
         }
@@ -149,6 +180,18 @@ public sealed class PythonEmitter
                 sb.Append("]");
                 return;
 
+            case DictLiteral d:
+                sb.Append("{");
+                for (int j = 0; j < d.Items.Count; j++)
+                {
+                    if (j > 0) sb.Append(", ");
+                    EmitExpr(d.Items[j].Key, sb);
+                    sb.Append(": ");
+                    EmitExpr(d.Items[j].Value, sb);
+                }
+                sb.Append("}");
+                return;
+
             case BinaryOp b:
                 EmitExpr(b.Left, sb);
                 sb.Append(" ");
@@ -175,16 +218,35 @@ public sealed class PythonEmitter
                 return;
 
             case MethodCall m:
-                EmitExpr(m.Target, sb);
-                sb.Append(".");
-                sb.Append(m.MethodName);
-                sb.Append("(");
-                for (int j = 0; j < m.Args.Count; j++)
+                if (m.MethodName == "__slice__")
                 {
-                    if (j > 0) sb.Append(", ");
-                    EmitExpr(m.Args[j], sb);
+                    EmitExpr(m.Target, sb);
+                    sb.Append("[");
+                    if (m.Args[0] is not Literal { Value: null })
+                        EmitExpr(m.Args[0], sb);
+                    sb.Append(":");
+                    if (m.Args[1] is not Literal { Value: null })
+                        EmitExpr(m.Args[1], sb);
+                    if (m.Args.Count > 2 && m.Args[2] is not Literal { Value: null })
+                    {
+                        sb.Append(":");
+                        EmitExpr(m.Args[2], sb);
+                    }
+                    sb.Append("]");
                 }
-                sb.Append(")");
+                else
+                {
+                    EmitExpr(m.Target, sb);
+                    sb.Append(".");
+                    sb.Append(m.MethodName);
+                    sb.Append("(");
+                    for (int j = 0; j < m.Args.Count; j++)
+                    {
+                        if (j > 0) sb.Append(", ");
+                        EmitExpr(m.Args[j], sb);
+                    }
+                    sb.Append(")");
+                }
                 return;
 
             case StringInterpolation s:
@@ -197,6 +259,32 @@ public sealed class PythonEmitter
                         sb.Append("{").Append(var.VarName).Append("}");
                 }
                 sb.Append("\"");
+                return;
+
+            case ListComprehension lc:
+                sb.Append("[");
+                EmitExpr(lc.Element, sb);
+                sb.Append(" for ");
+                sb.Append(lc.LoopVar);
+                sb.Append(" in ");
+                EmitExpr(lc.IterableExpr, sb);
+                if (lc.FilterCondition != null)
+                {
+                    sb.Append(" if ");
+                    EmitExpr(lc.FilterCondition, sb);
+                }
+                sb.Append("]");
+                return;
+
+            case LambdaExpr lam:
+                sb.Append("lambda ");
+                for (int j = 0; j < lam.Parameters.Count; j++)
+                {
+                    if (j > 0) sb.Append(", ");
+                    sb.Append(lam.Parameters[j]);
+                }
+                sb.Append(": ");
+                EmitExpr(lam.Body, sb);
                 return;
 
             default:

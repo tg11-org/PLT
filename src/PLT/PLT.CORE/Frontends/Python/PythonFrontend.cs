@@ -223,7 +223,7 @@ internal class PythonLexer
         {
             "True" or "False" => TokenType.BOOL,
             "None" => TokenType.NONE,
-            "if" or "elif" or "else" or "for" or "while" or "def" or "return" or "import" or "from" or "as" or "class" or "try" or "except" or "finally" or "with" or "pass" or "break" or "continue" or "in" or "and" or "or" or "not" => TokenType.KEYWORD,
+            "if" or "elif" or "else" or "for" or "while" or "def" or "return" or "import" or "from" or "as" or "class" or "try" or "except" or "finally" or "with" or "pass" or "break" or "continue" or "in" or "and" or "or" or "not" or "lambda" => TokenType.KEYWORD,
             _ => TokenType.IDENTIFIER
         };
 
@@ -312,6 +312,15 @@ internal class PythonParser
             if (IsAtEnd()) break;
             var stmt = ParseStatement();
             if (stmt != null) statements.Add(stmt);
+            
+            // Handle semicolon-separated statements on same line
+            while (Match(TokenType.SEMICOLON))
+            {
+                if (Check(TokenType.NEWLINE) || IsAtEnd()) break;
+                stmt = ParseStatement();
+                if (stmt != null) statements.Add(stmt);
+            }
+            
             SkipNewlines();
         }
 
@@ -338,6 +347,7 @@ internal class PythonParser
                 "from" => ParseFromImportStatement(),
                 "return" => ParseReturnStatement(),
                 "class" => ParseClassDef(),
+                "try" => ParseTryStatement(),
                 "if" => ParseIfStatement(),
                 "for" => ParseForStatement(),
                 "while" => ParseWhileStatement(),
@@ -346,9 +356,35 @@ internal class PythonParser
             };
         }
 
-        if (Check(TokenType.IDENTIFIER) && PeekNext()?.Type == TokenType.EQUALS)
+        if (Check(TokenType.IDENTIFIER))
         {
-            return ParseAssignment();
+            var next = PeekNext();
+            // Check if it's an assignment or member attribute assignment
+            if (next?.Type == TokenType.EQUALS)
+            {
+                return ParseAssignment();
+            }
+            // For member access (obj.attr), check if it's an assignment or expression
+            else if (next?.Type == TokenType.DOT)
+            {
+                // Look ahead to see if this is obj.attr = value or just obj.attr(...)
+                var pos = _current + 1; // position of the DOT
+                if (pos + 1 < _tokens.Count && _tokens[pos + 1].Type == TokenType.IDENTIFIER)
+                {
+                    pos += 2; // position after the attribute name
+                    if (pos < _tokens.Count && _tokens[pos].Type == TokenType.EQUALS)
+                    {
+                        return ParseAssignment(); // obj.attr = value
+                    }
+                }
+                // Otherwise it's an expression (method call or property access)
+                return ParseExpressionStatement();
+            }
+            // Type annotation: var: type = value
+            else if (next?.Type == TokenType.COLON)
+            {
+                return ParseAssignment();
+            }
         }
 
         return ParseExpressionStatement();
@@ -405,13 +441,36 @@ internal class PythonParser
         return new ExprStmt(expr);
     }
 
-    private VarAssignment ParseAssignment()
+    private Stmt ParseAssignment()
     {
         var varName = Consume(TokenType.IDENTIFIER, "Expected variable name").Value;
+        
+        // Check for member attribute access: obj.attr = value
+        if (Match(TokenType.DOT))
+        {
+            var attrName = Consume(TokenType.IDENTIFIER, "Expected attribute name").Value;
+            Consume(TokenType.EQUALS, "Expected '='");
+            var value = ParseExpression();
+            SkipNewlines();
+            // Return as expression statement with a special method call pattern
+            // This represents: setattr(varName, attrName, value)
+            return new ExprStmt(new Intrinsic("setattr", new List<Expr> { 
+                new Variable(varName), 
+                new Literal(attrName), 
+                value 
+            }));
+        }
+        
+        // Skip type annotation if present: var: type = value
+        if (Match(TokenType.COLON))
+        {
+            SkipTypeAnnotation();
+        }
+        
         Consume(TokenType.EQUALS, "Expected '='");
-        var value = ParseExpression();
+        var assignValue = ParseExpression();
         SkipNewlines();
-        return new VarAssignment(varName, value);
+        return new VarAssignment(varName, assignValue);
     }
 
     private IfStmt ParseIfStatement()
@@ -419,10 +478,21 @@ internal class PythonParser
         Consume(TokenType.KEYWORD, "Expected 'if'");
         var condition = ParseExpression();
         Consume(TokenType.COLON, "Expected ':'");
+        
+        // Check for single-line if statement (if condition: statement)
+        if (!Check(TokenType.NEWLINE))
+        {
+            // Parse single statement on same line
+            var stmt = ParseStatement();
+            var thenBody = new List<Stmt> { stmt! };
+            return new IfStmt(condition, thenBody, null);
+        }
+        
+        // Multi-line if statement
         SkipNewlines();
         Consume(TokenType.INDENT, "Expected indented block");
 
-        var thenBody = ParseIndentedBlock();
+        var thenBodyList = ParseIndentedBlock();
         IReadOnlyList<Stmt>? elseBody = null;
 
         if (Check(TokenType.DEDENT)) Advance();
@@ -437,7 +507,7 @@ internal class PythonParser
             if (Check(TokenType.DEDENT)) Advance();
         }
 
-        return new IfStmt(condition, thenBody, elseBody);
+        return new IfStmt(condition, thenBodyList, elseBody);
     }
 
     private ForEachStmt ParseForStatement()
@@ -470,6 +540,60 @@ internal class PythonParser
         if (Check(TokenType.DEDENT)) Advance();
 
         return new WhileStmt(condition, body);
+    }
+
+    private TryStmt ParseTryStatement()
+    {
+        Consume(TokenType.KEYWORD, "Expected 'try'");
+        Consume(TokenType.COLON, "Expected ':'");
+        SkipNewlines();
+        Consume(TokenType.INDENT, "Expected indented block");
+        var tryBody = ParseIndentedBlock();
+        if (Check(TokenType.DEDENT)) Advance();
+
+        var exceptClauses = new List<(string? ExceptionType, string? VarName, IReadOnlyList<Stmt> Body)>();
+        
+        while (Check(TokenType.KEYWORD) && Peek().Value == "except")
+        {
+            Advance(); // consume 'except'
+            string? exceptionType = null;
+            string? varName = null;
+            
+            // Parse exception type if present
+            if (!Check(TokenType.COLON))
+            {
+                if (Check(TokenType.IDENTIFIER))
+                    exceptionType = Advance().Value;
+                
+                // Parse 'as varname' if present
+                if (Check(TokenType.KEYWORD) && Peek().Value == "as")
+                {
+                    Advance(); // consume 'as'
+                    varName = Consume(TokenType.IDENTIFIER, "Expected variable name").Value;
+                }
+            }
+            
+            Consume(TokenType.COLON, "Expected ':'");
+            SkipNewlines();
+            Consume(TokenType.INDENT, "Expected indented block");
+            var exceptBody = ParseIndentedBlock();
+            if (Check(TokenType.DEDENT)) Advance();
+            
+            exceptClauses.Add((exceptionType, varName, exceptBody));
+        }
+
+        IReadOnlyList<Stmt>? finallyBody = null;
+        if (Check(TokenType.KEYWORD) && Peek().Value == "finally")
+        {
+            Advance(); // consume 'finally'
+            Consume(TokenType.COLON, "Expected ':'");
+            SkipNewlines();
+            Consume(TokenType.INDENT, "Expected indented block");
+            finallyBody = ParseIndentedBlock();
+            if (Check(TokenType.DEDENT)) Advance();
+        }
+
+        return new TryStmt(tryBody, exceptClauses, finallyBody);
     }
 
     private ClassDefStmt ParseClassDef()
@@ -523,17 +647,50 @@ internal class PythonParser
             do
             {
                 parameters.Add(Consume(TokenType.IDENTIFIER, "Expected parameter name").Value);
+                // Skip type annotation if present: name: type
+                if (Match(TokenType.COLON))
+                {
+                    SkipTypeAnnotation();
+                }
+                // Skip default value if present: = value
+                if (Match(TokenType.EQUALS))
+                {
+                    SkipDefaultValue();
+                }
             } while (Match(TokenType.COMMA));
         }
         Consume(TokenType.RPAREN, "Expected ')'");
+        
+        // Skip return type annotation if present: -> type
+        if (Check(TokenType.MINUS))
+        {
+            var nextIdx = _current + 1;
+            if (nextIdx < _tokens.Count && _tokens[nextIdx].Type == TokenType.GT)
+            {
+                Advance(); // consume MINUS
+                Advance(); // consume GT
+                SkipTypeAnnotation();
+            }
+        }
         Consume(TokenType.COLON, "Expected ':'");
+        
+        // Check for single-line function definition (def foo(): statement)
+        if (!Check(TokenType.NEWLINE))
+        {
+            // Parse single statement on same line
+            var stmt = ParseStatement();
+            var body = new List<Stmt> { stmt! };
+            return new FunctionDefStmt(funcName, parameters, body);
+        }
+        
+        // Multi-line function definition
         SkipNewlines();
         Consume(TokenType.INDENT, "Expected indented block");
 
-        var body = ParseIndentedBlock();
+        var bodyList = ParseIndentedBlock();
         if (Check(TokenType.DEDENT)) Advance();
 
-        return new FunctionDefStmt(funcName, parameters, body);
+        return new FunctionDefStmt(funcName, parameters, bodyList);
     }
 
     private List<Stmt> ParseIndentedBlock()
@@ -546,14 +703,75 @@ internal class PythonParser
             if (Check(TokenType.DEDENT)) break;
             var stmt = ParseStatement();
             if (stmt != null) statements.Add(stmt);
+            
+            // Handle semicolon-separated statements on same line
+            while (Match(TokenType.SEMICOLON))
+            {
+                if (Check(TokenType.NEWLINE) || Check(TokenType.DEDENT) || IsAtEnd()) break;
+                stmt = ParseStatement();
+                if (stmt != null) statements.Add(stmt);
+            }
         }
 
         return statements;
     }
+    
+    private void SkipTypeAnnotation()
+    {
+        // Skip over type annotations like: int, str, List[str], Optional[Dict[str, int]], etc.
+        int depth = 0;
+        while (!IsAtEnd())
+        {
+            if (Check(TokenType.LBRACKET)) { depth++; Advance(); }
+            else if (Check(TokenType.RBRACKET)) { depth--; Advance(); if (depth <= 0) break; }
+            else if (depth == 0 && (Check(TokenType.COMMA) || Check(TokenType.RPAREN) || Check(TokenType.COLON) || Check(TokenType.EQUALS) || Check(TokenType.NEWLINE))) break;
+            else Advance();
+        }
+    }
+
+    private void SkipDefaultValue()
+    {
+        // Skip over default parameter values like: 5, "string", [], {}, etc.
+        int depth = 0;
+        while (!IsAtEnd())
+        {
+            if (Check(TokenType.LPAREN) || Check(TokenType.LBRACKET) || Check(TokenType.LBRACE)) { depth++; Advance(); }
+            else if (Check(TokenType.RPAREN) && depth == 0) break;
+            else if (Check(TokenType.RPAREN) || Check(TokenType.RBRACKET) || Check(TokenType.RBRACE)) { depth--; Advance(); if (depth <= 0) break; }
+            else if (Check(TokenType.COMMA) && depth == 0) break;
+            else if (Check(TokenType.NEWLINE) && depth == 0) break;
+            else Advance();
+        }
+    }
 
     private Expr ParseExpression()
     {
+        // Check for lambda expressions
+        if (Check(TokenType.KEYWORD) && Peek().Value == "lambda")
+        {
+            return ParseLambda();
+        }
         return ParseOrExpression();
+    }
+
+    private Expr ParseLambda()
+    {
+        Consume(TokenType.KEYWORD, "Expected 'lambda'");
+        
+        var parameters = new List<string>();
+        if (!Check(TokenType.COLON))
+        {
+            do
+            {
+                if (Check(TokenType.IDENTIFIER))
+                    parameters.Add(Advance().Value);
+            } while (Match(TokenType.COMMA));
+        }
+        
+        Consume(TokenType.COLON, "Expected ':'");
+        var body = ParseOrExpression();
+        
+        return new LambdaExpr(parameters, body);
     }
 
     private Expr ParseOrExpression()
@@ -562,6 +780,11 @@ internal class PythonParser
 
         while (Match(TokenType.OR) || (Check(TokenType.KEYWORD) && Peek().Value == "or"))
         {
+            // If we matched the keyword "or", consume it
+            if (Check(TokenType.KEYWORD) && Peek().Value == "or")
+            {
+                Advance();
+            }
             var op = "or";
             var right = ParseAndExpression();
             expr = new BinaryOp(expr, op, right);
@@ -576,6 +799,11 @@ internal class PythonParser
 
         while (Match(TokenType.AND) || (Check(TokenType.KEYWORD) && Peek().Value == "and"))
         {
+            // If we matched the keyword "and", consume it
+            if (Check(TokenType.KEYWORD) && Peek().Value == "and")
+            {
+                Advance();
+            }
             var op = "and";
             var right = ParseComparisonExpression();
             expr = new BinaryOp(expr, op, right);
@@ -673,10 +901,44 @@ internal class PythonParser
             }
             else if (Match(TokenType.LBRACKET))
             {
-                var index = ParseExpression();
-                Consume(TokenType.RBRACKET, "Expected ']'");
-                // For now, treat as method call
-                expr = new MethodCall(expr, "__getitem__", new List<Expr> { index });
+                // Handle both indexing [expr] and slicing [start:end:step]
+                Expr? start = null, end = null, step = null;
+                
+                if (!Check(TokenType.COLON))
+                {
+                    start = ParseExpression();
+                }
+                
+                if (Match(TokenType.COLON))
+                {
+                    // Slice notation: [start:end:step] or [start:] or [:end] or [:] etc.
+                    if (!Check(TokenType.RBRACKET) && !Check(TokenType.COLON))
+                    {
+                        end = ParseExpression();
+                    }
+                    
+                    if (Match(TokenType.COLON))
+                    {
+                        if (!Check(TokenType.RBRACKET))
+                        {
+                            step = ParseExpression();
+                        }
+                    }
+                    
+                    Consume(TokenType.RBRACKET, "Expected ']'");
+                    // For slicing, treat as __slice__ method call
+                    expr = new MethodCall(expr, "__slice__", new List<Expr> { 
+                        start ?? new Literal(null), 
+                        end ?? new Literal(null),
+                        step ?? new Literal(null)
+                    });
+                }
+                else
+                {
+                    // Simple indexing
+                    Consume(TokenType.RBRACKET, "Expected ']'");
+                    expr = new MethodCall(expr, "__getitem__", new List<Expr> { start! });
+                }
             }
             else
             {
@@ -726,16 +988,75 @@ internal class PythonParser
 
         if (Match(TokenType.LBRACKET))
         {
-            var elements = new List<Expr>();
-            if (!Check(TokenType.RBRACKET))
+            if (Check(TokenType.RBRACKET))
+            {
+                Consume(TokenType.RBRACKET, "Expected ']'");
+                return new ListLiteral(new List<Expr>());
+            }
+            
+            var firstExpr = ParseExpression();
+            
+            // Check for list comprehension
+            if (Check(TokenType.KEYWORD) && Peek().Value == "for")
+            {
+                Advance(); // consume 'for'
+                if (!Check(TokenType.IDENTIFIER))
+                    throw new Exception("Expected variable name after 'for' in list comprehension");
+                var loopVar = Advance().Value;
+                
+                if (!Check(TokenType.KEYWORD) || Peek().Value != "in")
+                    throw new Exception("Expected 'in' after variable in list comprehension");
+                Advance(); // consume 'in'
+                
+                var iterableExpr = ParseOrExpression();
+                
+                // Check for optional filter condition
+                Expr? filterCondition = null;
+                if (Check(TokenType.KEYWORD) && Peek().Value == "if")
+                {
+                    Advance(); // consume 'if'
+                    filterCondition = ParseOrExpression();
+                }
+                
+                Consume(TokenType.RBRACKET, "Expected ']'");
+                return new ListComprehension(firstExpr, loopVar, iterableExpr, filterCondition);
+            }
+            
+            // Regular list literal
+            var elements = new List<Expr> { firstExpr };
+            while (Match(TokenType.COMMA))
+            {
+                SkipNewlinesAndIndentation();
+                if (Check(TokenType.RBRACKET))
+                    break;
+                elements.Add(ParseExpression());
+            }
+            SkipNewlinesAndIndentation();
+            Consume(TokenType.RBRACKET, "Expected ']'");
+            return new ListLiteral(elements);
+        }
+
+        if (Match(TokenType.LBRACE))
+        {
+            var items = new List<(Expr, Expr)>();
+            SkipNewlinesAndIndentation();
+            if (!Check(TokenType.RBRACE))
             {
                 do
                 {
-                    elements.Add(ParseExpression());
+                    SkipNewlinesAndIndentation();
+                    var key = ParseExpression();
+                    SkipNewlinesAndIndentation();
+                    Consume(TokenType.COLON, "Expected ':' in dictionary literal");
+                    SkipNewlinesAndIndentation();
+                    var value = ParseExpression();
+                    SkipNewlinesAndIndentation();
+                    items.Add((key, value));
                 } while (Match(TokenType.COMMA));
             }
-            Consume(TokenType.RBRACKET, "Expected ']'");
-            return new ListLiteral(elements);
+            SkipNewlinesAndIndentation();
+            Consume(TokenType.RBRACE, "Expected '}'");
+            return new DictLiteral(items);
         }
 
         throw new Exception($"Unexpected token: {Peek()}");
@@ -757,6 +1078,12 @@ internal class PythonParser
     private void SkipNewlines()
     {
         while (Match(TokenType.NEWLINE)) { }
+    }
+
+    private void SkipNewlinesAndIndentation()
+    {
+        // Skip newlines and indentation tokens (used inside brackets/braces/parens)
+        while (Match(TokenType.NEWLINE, TokenType.INDENT, TokenType.DEDENT)) { }
     }
 
     private bool Match(params TokenType[] types)

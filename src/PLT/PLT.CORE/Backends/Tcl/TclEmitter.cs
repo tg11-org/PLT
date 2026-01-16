@@ -110,6 +110,32 @@ public sealed class TclEmitter
                     EmitStmt(s, sb, indent);
                 break;
 
+            case TryStmt t:
+                if (!string.IsNullOrWhiteSpace(t.LeadingComment))
+                    sb.AppendLine($"{pad}# {t.LeadingComment}");
+                sb.AppendLine($"{pad}# Try block");
+                foreach (var s in t.TryBody)
+                    EmitStmt(s, sb, indent);
+                if (t.ExceptClauses.Count > 0)
+                {
+                    foreach (var (exceptionType, varName, body) in t.ExceptClauses)
+                    {
+                        if (!string.IsNullOrWhiteSpace(exceptionType))
+                            sb.AppendLine($"{pad}# Catch {exceptionType}" + (varName != null ? $" as {varName}" : ""));
+                        else
+                            sb.AppendLine($"{pad}# Catch all exceptions");
+                        foreach (var s in body)
+                            EmitStmt(s, sb, indent);
+                    }
+                }
+                if (t.FinallyBody != null)
+                {
+                    sb.AppendLine($"{pad}# Finally block");
+                    foreach (var s in t.FinallyBody)
+                        EmitStmt(s, sb, indent);
+                }
+                break;
+
             default:
                 throw new NotSupportedException($"Unsupported stmt: {stmt.GetType().Name}");
         }
@@ -156,6 +182,18 @@ public sealed class TclEmitter
                 sb.Append("]");
                 return;
 
+            case DictLiteral d:
+                sb.Append("[dict create");
+                for (int j = 0; j < d.Items.Count; j++)
+                {
+                    sb.Append(" ");
+                    EmitExpr(d.Items[j].Key, sb);
+                    sb.Append(" ");
+                    EmitExpr(d.Items[j].Value, sb);
+                }
+                sb.Append("]");
+                return;
+
             case BinaryOp b:
                 // Tcl uses expr for math/logic
                 sb.Append("[expr {");
@@ -198,15 +236,34 @@ public sealed class TclEmitter
                 return;
 
             case MethodCall m:
-                // Treat as namespace call
-                sb.Append("::");
-                sb.Append(m.MethodName);
-                sb.Append(" ");
-                EmitExpr(m.Target, sb);
-                for (int j = 0; j < m.Args.Count; j++)
+                if (m.MethodName == "__slice__")
                 {
+                    sb.Append("[string range ");
+                    EmitExpr(m.Target, sb);
                     sb.Append(" ");
-                    EmitExpr(m.Args[j], sb);
+                    if (m.Args[0] is not Literal { Value: null })
+                        EmitExpr(m.Args[0], sb);
+                    else
+                        sb.Append("0");
+                    sb.Append(" ");
+                    if (m.Args[1] is not Literal { Value: null })
+                        EmitExpr(m.Args[1], sb);
+                    else
+                        sb.Append("end");
+                    sb.Append("]");
+                }
+                else
+                {
+                    // Treat as namespace call
+                    sb.Append("::");
+                    sb.Append(m.MethodName);
+                    sb.Append(" ");
+                    EmitExpr(m.Target, sb);
+                    for (int j = 0; j < m.Args.Count; j++)
+                    {
+                        sb.Append(" ");
+                        EmitExpr(m.Args[j], sb);
+                    }
                 }
                 return;
 
@@ -220,6 +277,38 @@ public sealed class TclEmitter
                         sb.Append("$").Append(var.VarName);
                 }
                 sb.Append("\"");
+                return;
+
+            case ListComprehension lc:
+                sb.Append("[list");
+                sb.Append(" ");
+                sb.Append("[foreach ");
+                sb.Append(lc.LoopVar);
+                sb.Append(" ");
+                EmitExpr(lc.IterableExpr, sb);
+                sb.Append(" {");
+                if (lc.FilterCondition != null)
+                {
+                    sb.Append("if {");
+                    EmitExpr(lc.FilterCondition, sb);
+                    sb.Append("} {");
+                }
+                sb.Append("lappend _result ");
+                EmitExpr(lc.Element, sb);
+                if (lc.FilterCondition != null)
+                    sb.Append("}");
+                sb.Append("}]");
+                return;
+
+            case LambdaExpr lam:
+                sb.Append("lambda");
+                foreach (var param in lam.Parameters)
+                {
+                    sb.Append(" ").Append(param);
+                }
+                sb.Append(" {");
+                EmitExpr(lam.Body, sb);
+                sb.Append("}");
                 return;
 
             default:

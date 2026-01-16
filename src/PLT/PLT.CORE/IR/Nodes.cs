@@ -21,6 +21,8 @@ public record FunctionDefStmt(string FunctionName, IReadOnlyList<string> Paramet
 
 public record ClassDefStmt(string ClassName, IReadOnlyList<Stmt> Body, string? BaseClass = null, string? LeadingComment = null) : Stmt;
 
+public record TryStmt(IReadOnlyList<Stmt> TryBody, IReadOnlyList<(string? ExceptionType, string? VarName, IReadOnlyList<Stmt> Body)> ExceptClauses, IReadOnlyList<Stmt>? FinallyBody = null, string? LeadingComment = null) : Stmt;
+
 // Expressions
 public abstract record Expr : Node;
 
@@ -35,6 +37,12 @@ public record StringPartLiteral(string Value) : StringPart;
 public record StringPartVariable(string VarName) : StringPart;
 
 public record ListLiteral(IReadOnlyList<Expr> Elements) : Expr;
+
+public record DictLiteral(IReadOnlyList<(Expr Key, Expr Value)> Items) : Expr;
+
+public record ListComprehension(Expr Element, string LoopVar, Expr IterableExpr, Expr? FilterCondition = null) : Expr;
+
+public record LambdaExpr(IReadOnlyList<string> Parameters, Expr Body) : Expr;
 
 public record BinaryOp(Expr Left, string Op, Expr Right) : Expr;
 

@@ -114,6 +114,32 @@ public sealed class CEmitter
                     EmitStmt(s, sb, indent);
                 break;
 
+            case TryStmt t:
+                if (!string.IsNullOrWhiteSpace(t.LeadingComment))
+                    sb.AppendLine($"{pad}// {t.LeadingComment}");
+                sb.AppendLine($"{pad}// Try block");
+                foreach (var s in t.TryBody)
+                    EmitStmt(s, sb, indent);
+                if (t.ExceptClauses.Count > 0)
+                {
+                    foreach (var (exceptionType, varName, body) in t.ExceptClauses)
+                    {
+                        if (!string.IsNullOrWhiteSpace(exceptionType))
+                            sb.AppendLine($"{pad}// Catch {exceptionType}" + (varName != null ? $" as {varName}" : ""));
+                        else
+                            sb.AppendLine($"{pad}// Catch all exceptions");
+                        foreach (var s in body)
+                            EmitStmt(s, sb, indent);
+                    }
+                }
+                if (t.FinallyBody != null)
+                {
+                    sb.AppendLine($"{pad}// Finally block");
+                    foreach (var s in t.FinallyBody)
+                        EmitStmt(s, sb, indent);
+                }
+                break;
+
             default:
                 throw new NotSupportedException($"Unsupported stmt: {stmt.GetType().Name}");
         }
@@ -152,6 +178,18 @@ public sealed class CEmitter
                 sb.Append("}");
                 return;
 
+            case DictLiteral d:
+                sb.Append("/* dict: {");
+                for (int j = 0; j < d.Items.Count; j++)
+                {
+                    if (j > 0) sb.Append(", ");
+                    EmitExpr(d.Items[j].Key, sb);
+                    sb.Append(": ");
+                    EmitExpr(d.Items[j].Value, sb);
+                }
+                sb.Append("} */");
+                return;
+
             case BinaryOp b:
                 EmitExpr(b.Left, sb);
                 sb.Append(" ");
@@ -178,16 +216,36 @@ public sealed class CEmitter
                 return;
 
             case MethodCall m:
-                // C doesn't have methods, just function calls
-                sb.Append(m.MethodName);
-                sb.Append("(");
-                EmitExpr(m.Target, sb);
-                for (int j = 0; j < m.Args.Count; j++)
+                if (m.MethodName == "__slice__")
                 {
-                    sb.Append(", ");
-                    EmitExpr(m.Args[j], sb);
+                    sb.Append("/* slice: ");
+                    EmitExpr(m.Target, sb);
+                    sb.Append("[");
+                    if (m.Args[0] is not Literal { Value: null })
+                        EmitExpr(m.Args[0], sb);
+                    sb.Append(":");
+                    if (m.Args[1] is not Literal { Value: null })
+                        EmitExpr(m.Args[1], sb);
+                    if (m.Args.Count > 2 && m.Args[2] is not Literal { Value: null })
+                    {
+                        sb.Append(":");
+                        EmitExpr(m.Args[2], sb);
+                    }
+                    sb.Append("] */");
                 }
-                sb.Append(")");
+                else
+                {
+                    // C doesn't have methods, just function calls
+                    sb.Append(m.MethodName);
+                    sb.Append("(");
+                    EmitExpr(m.Target, sb);
+                    for (int j = 0; j < m.Args.Count; j++)
+                    {
+                        sb.Append(", ");
+                        EmitExpr(m.Args[j], sb);
+                    }
+                    sb.Append(")");
+                }
                 return;
 
             case StringInterpolation s:
@@ -200,6 +258,35 @@ public sealed class CEmitter
                         sb.Append("%s");  // simplified
                 }
                 sb.Append("\"");
+                return;
+
+            case ListComprehension lc:
+                // C doesn't have native list comprehensions, emit as comment
+                sb.Append("/* list comprehension: [");
+                EmitExpr(lc.Element, sb);
+                sb.Append(" for ");
+                sb.Append(lc.LoopVar);
+                sb.Append(" in ");
+                EmitExpr(lc.IterableExpr, sb);
+                if (lc.FilterCondition != null)
+                {
+                    sb.Append(" if ");
+                    EmitExpr(lc.FilterCondition, sb);
+                }
+                sb.Append("] */");
+                return;
+
+            case LambdaExpr lam:
+                // C doesn't have native lambdas, emit as comment
+                sb.Append("/* lambda ");
+                for (int j = 0; j < lam.Parameters.Count; j++)
+                {
+                    if (j > 0) sb.Append(", ");
+                    sb.Append(lam.Parameters[j]);
+                }
+                sb.Append(": ");
+                EmitExpr(lam.Body, sb);
+                sb.Append(" */");
                 return;
 
             default:
