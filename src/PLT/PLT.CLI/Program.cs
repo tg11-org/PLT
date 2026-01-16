@@ -1,6 +1,7 @@
 ﻿using PLT.CORE.IR;
 using PLT.CORE.Backends.Python;
 using PLT.CORE.Backends.C;
+using PLT.CORE.Backends.Tcl;
 using PLT.CORE.Frontends.Js;
 
 
@@ -9,11 +10,13 @@ static void Usage()
     Console.WriteLine("Usage:");
     Console.WriteLine("  plt --from js --to python <input.js> [-o out.py]");
     Console.WriteLine("  plt --from js --to c <input.js> [-o out.c]");
+    Console.WriteLine("  plt --from js --to tcl <input.js> [-o out.tcl]");
     Console.WriteLine("  --print-ir      Print the IR before emitting output");
     Console.WriteLine();
     Console.WriteLine("Examples:");
     Console.WriteLine("  dotnet run --project .\\PLT.CLI\\ -- --from js --to python examples\\hello.js -o out.py");
     Console.WriteLine("  dotnet run --project .\\PLT.CLI\\ -- --from js --to c examples\\hello.js -o out.c");
+    Console.WriteLine("  dotnet run --project .\\PLT.CLI\\ -- --from js --to tcl examples\\hello.js -o out.tcl");
     Console.WriteLine("  dotnet run --project .\\PLT.CLI\\ -- --from js --to python examples\\hello.js --print-ir -o out.py");
 }
 
@@ -88,6 +91,7 @@ string output = to switch
 {
     "python" or "py" => new PythonEmitter().Emit(ir),
     "c" => new CEmitter().Emit(ir),
+    "tcl" => new TclEmitter().Emit(ir),
     _ => throw new Exception($"Unsupported --to {to}")
 };
 
