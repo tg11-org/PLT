@@ -477,15 +477,27 @@ internal class PythonParser
         Consume(TokenType.KEYWORD, "Expected 'class'");
         var className = Consume(TokenType.IDENTIFIER, "Expected class name").Value;
         
-        // Skip optional base classes
+        // Parse optional base classes
+        string? baseClass = null;
         if (Match(TokenType.LPAREN))
         {
-            int parenDepth = 1;
-            while (parenDepth > 0 && !IsAtEnd())
+            if (!Check(TokenType.RPAREN))
             {
-                if (Check(TokenType.LPAREN)) parenDepth++;
-                else if (Check(TokenType.RPAREN)) parenDepth--;
-                Advance();
+                // Get the first base class
+                if (Check(TokenType.IDENTIFIER))
+                {
+                    baseClass = Advance().Value;
+                }
+                
+                // Skip any additional base classes or arguments
+                int parenDepth = 1;
+                while (parenDepth > 0 && !IsAtEnd())
+                {
+                    if (Check(TokenType.LPAREN)) parenDepth++;
+                    else if (Check(TokenType.RPAREN)) parenDepth--;
+                    else if (parenDepth == 1 && Check(TokenType.COMMA)) { } // comma between base classes
+                    Advance();
+                }
             }
         }
         
@@ -496,7 +508,7 @@ internal class PythonParser
         var body = ParseIndentedBlock();
         if (Check(TokenType.DEDENT)) Advance();
 
-        return new ClassDefStmt(className, body);
+        return new ClassDefStmt(className, body, baseClass);
     }
 
     private FunctionDefStmt ParseFunctionDef()

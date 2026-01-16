@@ -106,7 +106,10 @@ public sealed class CEmitter
             case ClassDefStmt c:
                 if (!string.IsNullOrWhiteSpace(c.LeadingComment))
                     sb.AppendLine($"{pad}// {c.LeadingComment}");
-                sb.AppendLine($"{pad}// Class {c.ClassName}");
+                if (!string.IsNullOrWhiteSpace(c.BaseClass))
+                    sb.AppendLine($"{pad}// Class {c.ClassName} extends {c.BaseClass}");
+                else
+                    sb.AppendLine($"{pad}// Class {c.ClassName}");
                 foreach (var s in c.Body)
                     EmitStmt(s, sb, indent);
                 break;

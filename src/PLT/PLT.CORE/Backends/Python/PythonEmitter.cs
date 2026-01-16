@@ -100,7 +100,14 @@ public sealed class PythonEmitter
                     sb.AppendLine($"{pad}# {c.LeadingComment}");
                 sb.Append(pad);
                 sb.Append("class ");
-                sb.AppendLine(c.ClassName + ":");
+                sb.Append(c.ClassName);
+                if (!string.IsNullOrWhiteSpace(c.BaseClass))
+                {
+                    sb.Append("(");
+                    sb.Append(c.BaseClass);
+                    sb.Append(")");
+                }
+                sb.AppendLine(":");
                 foreach (var s in c.Body)
                     EmitStmt(s, sb, indent + 1);
                 break;

@@ -25,3 +25,9 @@ class DataProcessor:
     def process(self, data):
         print("Processing data")
         return data
+
+
+class AltDataProcessor(DataProcessor):
+    def process(self, data):
+        print("Alternative processing of data")
+        return data

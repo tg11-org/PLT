@@ -19,7 +19,7 @@ public record WhileStmt(Expr Condition, IReadOnlyList<Stmt> Body, string? Leadin
 
 public record FunctionDefStmt(string FunctionName, IReadOnlyList<string> Parameters, IReadOnlyList<Stmt> Body, string? LeadingComment = null) : Stmt;
 
-public record ClassDefStmt(string ClassName, IReadOnlyList<Stmt> Body, string? LeadingComment = null) : Stmt;
+public record ClassDefStmt(string ClassName, IReadOnlyList<Stmt> Body, string? BaseClass = null, string? LeadingComment = null) : Stmt;
 
 // Expressions
 public abstract record Expr : Node;
