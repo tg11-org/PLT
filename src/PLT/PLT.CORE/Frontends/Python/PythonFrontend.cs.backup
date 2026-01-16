@@ -192,7 +192,6 @@ internal class PythonLexer
         var quote = _source[_position];
         _position++;
         var sb = new System.Text.StringBuilder();
-        bool isFString = prefix != null && (prefix == "f" || prefix == "F" || prefix.Contains('f') || prefix.Contains('F'));
 
         while (_position < _source.Length && _source[_position] != quote)
         {
@@ -210,22 +209,6 @@ internal class PythonLexer
                     '\'' => '\'',
                     _ => escaped
                 });
-            }
-            else if (isFString && _source[_position] == '{')
-            {
-                // For f-strings, skip over the embedded expression
-                // We'll just include the whole {...} as part of the string for now
-                int braceDepth = 0;
-                do
-                {
-                    if (_source[_position] == '{') braceDepth++;
-                    else if (_source[_position] == '}') braceDepth--;
-                    sb.Append(_source[_position]);
-                    _position++;
-                    _col++;
-                } while (_position < _source.Length && braceDepth > 0);
-                _position--; // Back up one since the loop will increment
-                _col--;
             }
             else
             {
@@ -505,14 +488,6 @@ internal class PythonParser
     private Stmt? ParseStatement()
     {
         SkipNewlines();
-        
-        // Skip stray INDENT/DEDENT tokens that can appear in certain contexts
-        // (e.g., after multi-line if blocks with nested single-line ifs)
-        while (Check(TokenType.INDENT) || Check(TokenType.DEDENT))
-        {
-            Advance();
-            SkipNewlines();
-        }
 
         // Skip decorators
         if (Check(TokenType.AT))
@@ -549,7 +524,7 @@ internal class PythonParser
         {
             var next = PeekNext();
             // Check if it's an assignment or augmented assignment or member attribute assignment
-            if (next?.Type == TokenType.EQUALS || (next != null && IsAugmentedAssignment(next.Type)))
+            if (next?.Type == TokenType.EQUALS || (next.HasValue && IsAugmentedAssignment(next.Value.Type)))
             {
                 return ParseAssignment();
             }
@@ -756,50 +731,6 @@ internal class PythonParser
     private Stmt ParseExpressionStatement()
     {
         var expr = ParseExpression();
-        
-        // Check if this is actually an assignment with a complex left-hand side
-        // e.g., obj.method()[key] = value or expr[subscript] = value
-        if (Check(TokenType.EQUALS) || IsAugmentedAssignment(Peek().Type))
-        {
-            var opToken = Advance();
-            var rhs = ParseExpression();
-            SkipNewlines();
-            
-            // For augmented assignment, we need to construct: lhs = lhs op rhs
-            if (opToken.Type != TokenType.EQUALS)
-            {
-                var op = opToken.Value switch
-                {
-                    "+=" => "+",
-                    "-=" => "-",
-                    "*=" => "*",
-                    "/=" => "/",
-                    "%=" => "%",
-                    "**=" => "**",
-                    "//=" => "//",
-                    "|=" => "|",
-                    "&=" => "&",
-                    "^=" => "^",
-                    "<<=" => "<<",
-                    ">>=" => ">>",
-                    _ => "+"
-                };
-                rhs = new BinaryOp(expr, op, rhs);
-            }
-            
-            // For subscript assignment: expr[subscript] = value
-            // We need to emit: expr.__setitem__(subscript, value)
-            if (expr is MethodCall mc && mc.MethodName == "__getitem__")
-            {
-                // This is a subscript access, convert to __setitem__
-                return new ExprStmt(new MethodCall(mc.Target, "__setitem__", 
-                    new List<Expr> { mc.Args[0], rhs }));
-            }
-            
-            // Otherwise, this might be an error case, but return as expression statement
-            return new ExprStmt(expr);
-        }
-        
         return new ExprStmt(expr);
     }
 
@@ -890,6 +821,14 @@ internal class PythonParser
                 SkipNewlines();
                 
                 // obj.attr += value  =>  obj.attr = obj.attr + value
+                                    "%=" => "%",
+                                    "**=" => "**",
+                                    "//=" => "//",
+                                    "|=" => "|",
+                                    "&=" => "&",
+                                    "^=" => "^",
+                                    "<<=" => "<<",
+                                    ">>=" => ">>",
                 var op = opToken.Value switch
                 {
                     "+=" => "+",
@@ -932,6 +871,14 @@ internal class PythonParser
             
             // Convert augmented assignment to regular assignment with binary operation
             // x += y  =>  x = x + y
+                            "%=" => "%",
+                            "**=" => "**",
+                            "//=" => "//",
+                            "|=" => "|",
+                            "&=" => "&",
+                            "^=" => "^",
+                            "<<=" => "<<",
+                            ">>=" => ">>",
             var op = opToken.Value switch
             {
                 "+=" => "+",
@@ -987,17 +934,10 @@ internal class PythonParser
                 if (stmt != null) thenBody.Add(stmt);
             }
             
-            // Check for single-line elif/else clause
+            // Check for single-line else clause: if cond: stmt else: stmt
             IReadOnlyList<Stmt>? elseBody = null;
             SkipNewlines();
-            
-            // Handle elif chains
-            if (Check(TokenType.KEYWORD) && Peek().Value == "elif")
-            {
-                // Parse elif as nested if statement
-                elseBody = new List<Stmt> { ParseIfStatement() };
-            }
-            else if (Check(TokenType.KEYWORD) && Peek().Value == "else")
+            if (Check(TokenType.KEYWORD) && Peek().Value == "else")
             {
                 Advance();  // consume 'else'
                 Consume(TokenType.COLON, "Expected ':'");
@@ -1827,22 +1767,7 @@ internal class PythonParser
         if (Match(TokenType.STRING))
         {
             var value = Previous().Value;
-            // Python allows implicit string concatenation: "hello" "world" becomes "helloworld"
-            // This works even across newlines inside parentheses
-            // Check if there are more string literals following this one
-            while (true)
-            {
-                SkipNewlines();
-                if (Check(TokenType.STRING))
-                {
-                    Advance();
-                    value += Previous().Value;
-                }
-                else
-                {
-                    break;
-                }
-            }
+            // Check for f-strings
             return new Literal(value);
         }
 
@@ -2045,9 +1970,6 @@ internal class PythonParser
                 while (Check(TokenType.INDENT) || Check(TokenType.DEDENT)) Advance();
                 SkipNewlines();
                 
-                // Check for trailing comma - if we see RPAREN, stop parsing arguments
-                if (Check(TokenType.RPAREN)) break;
-                
                 // Check if this is a keyword argument (identifier followed by =)
                 if (Check(TokenType.IDENTIFIER))
                 {
@@ -2137,16 +2059,16 @@ internal class PythonParser
     {
         if (IsAtEnd()) return false;
         return Peek().Type == type;
-    }
 
-    private bool IsAugmentedAssignment(TokenType type)
-    {
-        return type == TokenType.PLUSEQ || type == TokenType.MINUSEQ || 
-               type == TokenType.STAREQ || type == TokenType.SLASHEQ ||
-               type == TokenType.PERCENTEQ || type == TokenType.STARSTAREQ ||
-               type == TokenType.SLASHSLASHEQ || type == TokenType.PIPEEQ ||
-               type == TokenType.AMPEQ || type == TokenType.CARETEQ ||
-               type == TokenType.LSHIFTEQ || type == TokenType.RSHIFTEQ;
+        private bool IsAugmentedAssignment(TokenType type)
+        {
+            return type == TokenType.PLUSEQ || type == TokenType.MINUSEQ || 
+                   type == TokenType.STAREQ || type == TokenType.SLASHEQ ||
+                   type == TokenType.PERCENTEQ || type == TokenType.STARSTAREQ ||
+                   type == TokenType.SLASHSLASHEQ || type == TokenType.PIPEEQ ||
+                   type == TokenType.AMPEQ || type == TokenType.CARETEQ ||
+                   type == TokenType.LSHIFTEQ || type == TokenType.RSHIFTEQ;
+        }
     }
 
     private Token Advance()

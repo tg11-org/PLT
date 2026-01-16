@@ -353,6 +353,18 @@ public sealed class PythonEmitter
                 EmitExpr(lam.Body, sb);
                 return;
 
+            case Intrinsic intrinsic:
+                // Handle intrinsic operations like getattr/setattr
+                sb.Append(intrinsic.Name);
+                sb.Append("(");
+                for (int j = 0; j < intrinsic.Args.Count; j++)
+                {
+                    if (j > 0) sb.Append(", ");
+                    EmitExpr(intrinsic.Args[j], sb);
+                }
+                sb.Append(")");
+                return;
+
             default:
                 throw new NotSupportedException($"Unsupported expr: {expr.GetType().Name}");
         }
