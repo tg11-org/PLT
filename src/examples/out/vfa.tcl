@@ -40,14 +40,14 @@ proc __init__ {self level} {
 proc _fmt {self level_name msg} {
     set now [string range ::strftime ::now $datetime "%m/%d/%Y %H:%M:%S.%f" 0 [expr {- 1}]]
     set prefix "[VFA {level_name.upper():<7}] {now}"
-    set pad [expr {[expr {LOG_COL_PIPE - len $prefix}] - 1}]
-    if {[expr {pad < 1}]} {
+    set pad [expr {[expr {$LOG_COL_PIPE - len $prefix}] - 1}]
+    if {[expr {$pad < 1}]} {
         set pad 1
     }
     "{prefix}{' ' * pad}| {msg}"
 }
 proc _emit {self lvl name msg} {
-    if {[expr {::level $self >= lvl}]} {
+    if {[expr {::level $self >= $lvl}]} {
         puts ::_fmt $self $name $msg
     }
 }
@@ -71,9 +71,9 @@ proc human_bytes {n} {
     set units [list "B" "KiB" "MiB" "GiB" "TiB" "PiB"]
     set v float $n
     set i 0
-    while {[expr {[expr {v >= 1024}] and [expr {i < [expr {len $units - 1}]}]}]} {
-        set v [expr {v / 1024}]
-        set i [expr {i + 1}]
+    while {[expr {[expr {$v >= 1024}] and [expr {$i < [expr {len $units - 1}]}]}]} {
+        set v [expr {$v / 1024}]
+        set i [expr {$i + 1}]
     }
     "{v:.2f} {units[i]}"
 }
@@ -87,13 +87,13 @@ proc __init__ {self total_files total_bytes} {
 }
 proc add_file {self size duration_s} {
     setattr $self "done_files" [expr {getattr $self "done_files" + 1}]
-    setattr $self "done_bytes" [expr {getattr $self "done_bytes" + size}]
+    setattr $self "done_bytes" [expr {getattr $self "done_bytes" + $size}]
 }
 proc estimate {self} {
     set elapsed [expr {::time $time - ::start_ts $self}]
-    set rate [expr {[expr {elapsed > 0}] ? [expr {::done_bytes $self / elapsed}] : 0}]
+    set rate [expr {[expr {$elapsed > 0}] ? [expr {::done_bytes $self / $elapsed}] : 0}]
     set remain_bytes max 0 [expr {::total_bytes $self - ::done_bytes $self}]
-    set eta [expr {[expr {rate > 0}] ? [expr {remain_bytes / rate}] : float "inf"}]
+    set eta [expr {[expr {$rate > 0}] ? [expr {$remain_bytes / $rate}] : float "inf"}]
     set ratio [expr {[expr {::total_bytes $self > 0}] ? [expr {::done_bytes $self / ::total_bytes $self}] : 0}]
     [list $elapsed $eta $rate $ratio]
 }
@@ -111,7 +111,7 @@ set M_LZMA 2
 set M_BROTLI 3
 set M_ZSTD 4
 set METHOD_NAMES [dict create $M_NONE "none" $M_ZLIB "zlib" $M_LZMA "lzma" $M_BROTLI "brotli" $M_ZSTD "zstd"]
-set NAME_TO_METHOD [dict create [foreach {k v} [set _items [list]; foreach k [dict keys $METHOD_NAMES] {lappend _items $k [dict get $METHOD_NAMES $k]}; set _items] {dict set _result $v $k}]]
+set NAME_TO_METHOD [dict create {*}[set _result [dict create]; foreach {k v} [set _items [list]; foreach k [dict keys $METHOD_NAMES] {lappend _items $k [dict get $METHOD_NAMES $k]}; set _items] {dict set _result $v $k}; set _result]]
 set F_ENCRYPTED [expr {1 << 0}]
 set F_SOLID [expr {1 << 1}]
 set H_NONE 0
@@ -128,17 +128,17 @@ proc default_hash_kind {} {
     $H_SHA256
 }
 proc make_hasher {kind} {
-    if {[expr {kind == H_XXH64}]} {
-        if {[expr {not HAVE_XXH}]} {
+    if {[expr {$kind == $H_XXH64}]} {
+        if {[expr {not $HAVE_XXH}]} {
             error RuntimeError "xxhash not installed"
         }
     }
-    if {[expr {kind == H_BLAKE3}]} {
-        if {[expr {not HAVE_BLAKE3}]} {
+    if {[expr {$kind == $H_BLAKE3}]} {
+        if {[expr {not $HAVE_BLAKE3}]} {
             error RuntimeError "blake3 not installed"
         }
     }
-    if {[expr {kind == H_SHA256}]} {
+    if {[expr {$kind == $H_SHA256}]} {
         ::sha256 $hashlib
     }
     error RuntimeError "bad hash kind"
@@ -147,8 +147,8 @@ proc hasher_update {h data kind} {
     ::update $h $data
 }
 proc hasher_digest {h kind} {
-    if {[expr {kind == H_XXH64}]} {
-        [expr {::digest $h + [expr {"x00" * 24}]}]
+    if {[expr {$kind == $H_XXH64}]} {
+        [expr {::digest $h + [string repeat "x00" 24]}]
     }
     ::digest $h
 }
@@ -162,7 +162,7 @@ proc nonce_from {prefix12 index} {
 # Class HeaderV1
 set version $VERSION
 set flags 0
-set default_method [expr {HAVE_ZSTD ? M_ZSTD : M_ZLIB}]
+set default_method [expr {$HAVE_ZSTD ? $M_ZSTD : $M_ZLIB}]
 set default_level 5
 set block_exp 22
 set threads_hint 0
@@ -171,15 +171,15 @@ set kdf_id $KDF_NONE
 set kdf_t 0
 set kdf_m 0
 set kdf_p 0
-set salt [expr {"x00" * 16}]
+set salt [string repeat "x00" 16]
 set aead_id $AEAD_NONE
-set aead_nonce_prefix [expr {"x00" * 12}]
-set reserved [expr {"x00" * 16}]
+set aead_nonce_prefix [string repeat "x00" 12]
+set reserved [string repeat "x00" 16]
 proc pack {self} {
     [join [list $MAGIC ::pack $struct "<H" ::version $self ::pack $struct "<I" ::flags $self ::pack $struct "<B" ::default_method $self ::pack $struct "<B" ::default_level $self ::pack $struct "<B" ::block_exp $self ::pack $struct "<H" ::threads_hint $self ::pack $struct "<I" ::ram_mib_hint $self ::pack $struct "<B" ::kdf_id $self ::pack $struct "<I" ::kdf_t $self ::pack $struct "<I" ::kdf_m $self ::pack $struct "<B" ::kdf_p $self ::salt $self ::pack $struct "<B" ::aead_id $self ::aead_nonce_prefix $self ::reserved $self] ""]
 }
 proc unpack {cls bio} {
-    if {[expr {::read $bio 4 != MAGIC}]} {
+    if {[expr {::read $bio 4 != $MAGIC}]} {
         error ValueError "Not a VFA archive"
     }
     set _tuple ::unpack $struct "<H" ::read $bio 2
@@ -277,7 +277,7 @@ proc unpack {cls data solid} {
         lassign $_tuple entry_type
         set _tuple ::unpack $struct "<I" ::read $bio 4
         lassign $_tuple mlen
-        set meta [expr {[expr {mlen > 0}] ? ::read $bio $mlen : ""}]
+        set meta [expr {[expr {$mlen > 0}] ? ::read $bio $mlen : ""}]
         # Catch Exception
         ::seek $bio $pos_before
         set blocks [list]
@@ -298,19 +298,19 @@ proc unpack {cls data solid} {
                 [lappend $blocks [list $idx $usz $csz $meth]]
             }
         }
-        [lappend $entries FileEntry $path $mode $mtime $size $blocks $start_off $entry_type [expr {meta or ""}]]
+        [lappend $entries FileEntry $path $mode $mtime $size $blocks $start_off $entry_type [expr {$meta or ""}]]
     }
     cls $entries
 }
 proc kdf_derive_key {password header} {
-    if {[expr {::kdf_id $header == KDF_ARGON2ID}]} {
-        if {[expr {not HAVE_ARGON2}]} {
+    if {[expr {::kdf_id $header == $KDF_ARGON2ID}]} {
+        if {[expr {not $HAVE_ARGON2}]} {
             error RuntimeError "argon2-cffi not installed"
         }
         ::hash_secret_raw $argon2ll $secret=password $salt= $time_cost= $memory_cost= $parallelism= $hash_len= $type= $version=
     }
-    if {[expr {::kdf_id $header == KDF_SCRYPT}]} {
-        if {[expr {Scrypt is ""}]} {
+    if {[expr {::kdf_id $header == $KDF_SCRYPT}]} {
+        if {[expr {$Scrypt is ""}]} {
             error RuntimeError "cryptography not installed"
         }
         ::derive Scrypt $salt= $length= $n= $r= $p= $password
@@ -318,36 +318,36 @@ proc kdf_derive_key {password header} {
     error RuntimeError "Archive not password-protected"
 }
 proc aead_encrypt {key header index plaintext aad} {
-    if {[expr {[expr {::aead_id $header != AEAD_AESGCM}] or [expr {not HAVE_AESGCM}]}]} {
+    if {[expr {[expr {::aead_id $header != $AEAD_AESGCM}] or [expr {not $HAVE_AESGCM}]}]} {
         error RuntimeError "AESGCM unavailable"
     }
     ::encrypt AESGCM $key nonce_from ::aead_nonce_prefix $header $index $plaintext $aad
 }
 proc aead_decrypt {key header index ciphertext aad} {
-    if {[expr {[expr {::aead_id $header != AEAD_AESGCM}] or [expr {not HAVE_AESGCM}]}]} {
+    if {[expr {[expr {::aead_id $header != $AEAD_AESGCM}] or [expr {not $HAVE_AESGCM}]}]} {
         error RuntimeError "AESGCM unavailable"
     }
     ::decrypt AESGCM $key nonce_from ::aead_nonce_prefix $header $index $ciphertext $aad
 }
 proc compress_block {method level data} {
-    if {[expr {method == M_NONE}]} {
+    if {[expr {$method == $M_NONE}]} {
         $data
     }
-    if {[expr {method == M_ZLIB}]} {
-        ::compress $zlib $data [expr {[expr {[expr {1 <= level}] <= 9}] ? level : 6}]
+    if {[expr {$method == $M_ZLIB}]} {
+        ::compress $zlib $data [expr {[expr {[expr {1 <= $level}] <= 9}] ? $level : 6}]
     }
-    if {[expr {method == M_LZMA}]} {
+    if {[expr {$method == $M_LZMA}]} {
         set preset max 0 min 9 $level
         ::compress $lzma $data $format= $preset=preset
     }
-    if {[expr {method == M_BROTLI}]} {
-        if {[expr {not HAVE_BROTLI}]} {
+    if {[expr {$method == $M_BROTLI}]} {
+        if {[expr {not $HAVE_BROTLI}]} {
             error RuntimeError "brotli not installed"
         }
         ::compress $brotli $data $quality=
     }
-    if {[expr {method == M_ZSTD}]} {
-        if {[expr {not HAVE_ZSTD}]} {
+    if {[expr {$method == $M_ZSTD}]} {
+        if {[expr {not $HAVE_ZSTD}]} {
             error RuntimeError "zstandard not installed"
         }
         ::compress ::ZstdCompressor $zstd $level= $data
@@ -355,23 +355,23 @@ proc compress_block {method level data} {
     error RuntimeError "unknown method"
 }
 proc decompress_block {method data} {
-    if {[expr {method == M_NONE}]} {
+    if {[expr {$method == $M_NONE}]} {
         $data
     }
-    if {[expr {method == M_ZLIB}]} {
+    if {[expr {$method == $M_ZLIB}]} {
         ::decompress $zlib $data
     }
-    if {[expr {method == M_LZMA}]} {
+    if {[expr {$method == $M_LZMA}]} {
         ::decompress $lzma $data
     }
-    if {[expr {method == M_BROTLI}]} {
-        if {[expr {not HAVE_BROTLI}]} {
+    if {[expr {$method == $M_BROTLI}]} {
+        if {[expr {not $HAVE_BROTLI}]} {
             error RuntimeError "brotli not installed"
         }
         ::decompress $brotli $data
     }
-    if {[expr {method == M_ZSTD}]} {
-        if {[expr {not HAVE_ZSTD}]} {
+    if {[expr {$method == $M_ZSTD}]} {
+        if {[expr {not $HAVE_ZSTD}]} {
             error RuntimeError "zstandard not installed"
         }
         ::decompress ::ZstdDecompressor $zstd $data
@@ -395,7 +395,7 @@ proc read_footer {br} {
     set toc_sz [lindex ::unpack $struct "<I" ::read $br 4 0]
     set hk [lindex ::unpack $struct "<B" ::read $br 1 0]
     set dig ::read $br 32
-    if {[expr {::read $br 5 != END_MAGIC}]} {
+    if {[expr {::read $br 5 != $END_MAGIC}]} {
         error ValueError "Bad end magic"
     }
     [list $toc_off $toc_sz $hk $dig]
@@ -410,7 +410,7 @@ proc iter_tree {paths} {
                 set st ::lstat $rp
                 [list $rp $st $ET_DIR]
                 foreach name $files {
-                    set fp [expr {rp / name}]
+                    set fp [expr {$rp / $name}]
                     set stf ::lstat $fp
                     if {::S_ISLNK $stat ::st_mode $stf} {
                         [list $fp $stf $ET_SYMLINK]
@@ -495,15 +495,15 @@ proc selinux_get {path follow_symlinks} {
     ""
 }
 proc fallocate_punch_hole {fd offset length} {
-    if {[expr {not LIN}]} {
+    if {[expr {not $LIN}]} {
         ""
     }
     # Try block
     set libc ::CDLL $ctypes "libc.so.6" $use_errno=
     set FALLOC_FL_KEEP_SIZE 1
     set FALLOC_FL_PUNCH_HOLE 2
-    set res ::fallocate $libc $fd [expr {FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE}] ::c_longlong $ctypes $offset ::c_longlong $ctypes $length
-    if {[expr {res != 0}]} {
+    set res ::fallocate $libc $fd [expr {$FALLOC_FL_PUNCH_HOLE | $FALLOC_FL_KEEP_SIZE}] ::c_longlong $ctypes $offset ::c_longlong $ctypes $length
+    if {[expr {$res != 0}]} {
         # pass
     }
     # Catch Exception
@@ -512,7 +512,7 @@ proc fallocate_punch_hole {fd offset length} {
 proc detect_sparse {path} {
     "Return list of (offset,length) holes using SEEK_HOLE/SEEK_DATA if supported; else []"
     set holes [list]
-    if {[expr {not LIN}]} {
+    if {[expr {not $LIN}]} {
         $holes
     }
     # Try block
@@ -523,7 +523,7 @@ proc detect_sparse {path} {
 }
 proc win_capture_meta {path} {
     set meta [dict create]
-    if {[expr {not [expr {WIN and HAVE_WIN32}]}]} {
+    if {[expr {not [expr {$WIN and $HAVE_WIN32}]}]} {
         $meta
     }
     # Try block
@@ -545,11 +545,11 @@ proc win_capture_meta {path} {
     # Try block
     foreach s ::FindStreamsW $win32file $path {
         set name [lindex $s 0]
-        if {[expr {name in [list ":\$DATA" "::\$DATA"]}]} {
+        if {[expr {$name in [list ":\$DATA" "::\$DATA"]}]} {
             # pass
         }
         # Try block
-        open [expr {path + name}] "rb"
+        open [expr {$path + $name}] "rb"
         # Catch Exception
         [lappend $ads [dict create "name" $name "hex" ""]]
     }
@@ -563,42 +563,42 @@ proc win_capture_meta {path} {
     $meta
 }
 proc win_apply_meta {path meta is_dir} {
-    if {[expr {not [expr {WIN and HAVE_WIN32}]}]} {
+    if {[expr {not [expr {$WIN and $HAVE_WIN32}]}]} {
         ""
     }
     # Try block
-    if {[expr {"attrs" in meta}]} {
+    if {[expr {"attrs" in $meta}]} {
         ::SetFileAttributesW $win32file $path int [lindex $meta "attrs"]
     }
     # Catch Exception
     # pass
-    if {any [expr {k in meta}]} {
+    if {any [expr {$k in $meta}]} {
         # Try block
         set h ::CreateFile $win32file $path ::GENERIC_WRITE $win32con [expr {[expr {::FILE_SHARE_READ $win32con | ::FILE_SHARE_WRITE $win32con}] | ::FILE_SHARE_DELETE $win32con}] "" ::OPEN_EXISTING $win32con ::FILE_FLAG_BACKUP_SEMANTICS $win32con ""
 proc to_ft {ts} {
             ::Time $pywintypes float $ts
 }
-        set ct [expr {[expr {"ctime" in meta}] ? to_ft ::get $meta "ctime" : ""}]
-        set at [expr {[expr {"atime" in meta}] ? to_ft ::get $meta "atime" : ""}]
-        set mt [expr {[expr {"mtime" in meta}] ? to_ft ::get $meta "mtime" : ""}]
+        set ct [expr {[expr {"ctime" in $meta}] ? to_ft ::get $meta "ctime" : ""}]
+        set at [expr {[expr {"atime" in $meta}] ? to_ft ::get $meta "atime" : ""}]
+        set mt [expr {[expr {"mtime" in $meta}] ? to_ft ::get $meta "mtime" : ""}]
         ::SetFileTime $win32file $h $ct $at $mt
         ::Close $h
         # Catch Exception
         # pass
     }
-    if {[expr {"sddl" in meta}]} {
+    if {[expr {"sddl" in $meta}]} {
         # Try block
         set sd ::ConvertStringSecurityDescriptorToSecurityDescriptor $win32security [lindex $meta "sddl"] ::SDDL_REVISION_1 $win32security
         ::SetFileSecurity $win32security $path [expr {[expr {::DACL_SECURITY_INFORMATION $win32security | ::OWNER_SECURITY_INFORMATION $win32security}] | ::GROUP_SECURITY_INFORMATION $win32security}] $sd
         # Catch Exception
         # pass
     }
-    if {[expr {"ads" in meta}]} {
+    if {[expr {"ads" in $meta}]} {
         foreach s [lindex $meta "ads"] {
             # Try block
             if {[expr {::get $s "hex" is not ""}]} {
                 set data ::fromhex $bytes [lindex $s "hex"]
-                open [expr {path + [lindex $s "name"]}] "wb"
+                open [expr {$path + [lindex $s "name"]}] "wb"
             }
             # Catch Exception
             # pass
@@ -612,8 +612,8 @@ proc _load_header_toc_and_key {br need_password} {
     ::seek $br $toc_off
     set toc_data ::read $br $toc_sz
     set key ""
-    if {[expr {::flags $header & F_ENCRYPTED}]} {
-        if {[expr {not need_password}]} {
+    if {[expr {::flags $header & $F_ENCRYPTED}]} {
+        if {[expr {not $need_password}]} {
             error SystemExit "Archive is encrypted; use --password"
         }
         set pw ::getpass $getpass "Password: "
@@ -627,20 +627,20 @@ proc _recompute_hash_until {bf upto hash_kind} {
     ::seek $bf 0
     set h make_hasher $hash_kind
     set done 0
-    while {[expr {done < upto}]} {
-        set chunk ::read $bf min [expr {1024 * 1024}] [expr {upto - done}]
-        if {[expr {not chunk}]} {
+    while {[expr {$done < $upto}]} {
+        set chunk ::read $bf min [expr {1024 * 1024}] [expr {$upto - $done}]
+        if {[expr {not $chunk}]} {
             # pass
         }
         hasher_update $h $chunk $hash_kind
-        set done [expr {done + len $chunk}]
+        set done [expr {$done + len $chunk}]
     }
     hasher_digest $h $hash_kind
 }
 proc cmd_create {args} {
     set block_size [expr {1 << ::block_exp $args}]
     set method ::get $NAME_TO_METHOD ::method $args
-    if {[expr {method is ""}]} {
+    if {[expr {$method is ""}]} {
         error SystemExit "Unknown method {args.method}"
     }
     set header HeaderV1
@@ -650,11 +650,11 @@ proc cmd_create {args} {
     setattr $header "threads_hint" ::threads $args
     setattr $header "ram_mib_hint" ::max_ram_mib $args
     if {::solid $args} {
-        setattr $header "flags" [expr {getattr $header "flags" + F_SOLID}]
+        setattr $header "flags" [expr {getattr $header "flags" + $F_SOLID}]
     }
     set key ""
     if {::password $args} {
-        if {[expr {not HAVE_AESGCM}]} {
+        if {[expr {not $HAVE_AESGCM}]} {
             error SystemExit "cryptography not installed; cannot encrypt"
         }
         if {$HAVE_ARGON2} {
@@ -671,7 +671,7 @@ proc cmd_create {args} {
         setattr $header "salt" ::urandom $os 16
         setattr $header "aead_id" $AEAD_AESGCM
         setattr $header "aead_nonce_prefix" ::urandom $os 12
-        setattr $header "flags" [expr {getattr $header "flags" + F_ENCRYPTED}]
+        setattr $header "flags" [expr {getattr $header "flags" + $F_ENCRYPTED}]
         ::info $LOGGER "Encryption enabled (AES-256-GCM)."
         set pw ::getpass $getpass "Password: "
         set key kdf_derive_key $pw $header
@@ -682,21 +682,21 @@ set block_index 0
 set hardlinks [dict create]
 open ::output $args "wb"
 set items list iter_tree ::inputs $args
-if {[expr {[expr {::flags $header & F_SOLID}] and [expr {::solid_by $args == "ext"}]}]} {
+if {[expr {[expr {::flags $header & $F_SOLID}] and [expr {::solid_by $args == "ext"}]}]} {
 proc ext_key {item} {
         set _tuple $item
         lassign $_tuple fp st et
         set e [string tolower ::suffix $fp]
-        [list [expr {e ? e : ""}] str $fp]
+        [list [expr {$e ? $e : ""}] str $fp]
 }
     ::sort $items $key=ext_key
 }
-set file_items [list [foreach it $items {if {[expr {[lindex $it 2] == ET_FILE}]} {lappend _result $it}}]
+set file_items [list [foreach it $items {if {[expr {[lindex $it 2] == $ET_FILE}]} {lappend _result $it}}]
 set total_files len $file_items
-set total_bytes sum int getattr $st "st_size" 0 $st [expr {_ in file_items}]
+set total_bytes sum int getattr $st "st_size" 0 $st [expr {$_ in $file_items}]
 set prog Progress $total_files $total_bytes
 ::info $LOGGER "Preparing to compress {total_files} files ({human_bytes(total_bytes)}). Solid={bool(args.solid)} method={args.method} lvl={args.level}"
-if {[expr {[expr {::flags $header & F_SOLID}] and [expr {::solid_chunk_exp $args is not ""}]}]} {
+if {[expr {[expr {::flags $header & $F_SOLID}] and [expr {::solid_chunk_exp $args is not ""}]}]} {
     ::info $LOGGER "Solid chunk size ≈ {human_bytes(1<<int(args.solid_chunk_exp))}"
 }
 set solid_buffer ::BytesIO $io
@@ -707,34 +707,34 @@ foreach fp, st, et $items {
     set st_mtime int getattr $st "st_mtime" ::time $time
     set meta_obj [dict create]
 }
-if {[expr {LIN and ::posixmeta $args}]} {
+if {[expr {$LIN and ::posixmeta $args}]} {
     ::update $meta_obj posix_capture_meta $rel $st
 }
-if {[expr {WIN and ::winmeta $args}]} {
+if {[expr {$WIN and ::winmeta $args}]} {
     ::__setitem__ $meta_obj "win" win_capture_meta $rel
 }
-if {[expr {LIN and ::xattrs $args}]} {
+if {[expr {$LIN and ::xattrs $args}]} {
     set x list_xattrs $rel $follow_symlinks=
     if {$x} {
-        ::__setitem__ $meta_obj "xattrs" [dict create [foreach {k v} [set _items [list]; foreach k [dict keys $x] {lappend _items $k [dict get $x $k]}; set _items] {dict set _result $k ::hex $v}]]
+        ::__setitem__ $meta_obj "xattrs" [dict create {*}[set _result [dict create]; foreach {k v} [set _items [list]; foreach k [dict keys $x] {lappend _items $k [dict get $x $k]}; set _items] {dict set _result $k ::hex $v}; set _result]]
     }
 }
-if {[expr {LIN and ::selinux $args}]} {
+if {[expr {$LIN and ::selinux $args}]} {
     set sctx selinux_get $rel $follow_symlinks=
-    if {[expr {sctx is not ""}]} {
+    if {[expr {$sctx is not ""}]} {
         ::__setitem__ ::setdefault $meta_obj "xattrs" [dict create] "security.selinux" ::hex $sctx
         ::__setitem__ $meta_obj "selinux" $sctx
     }
 }
-if {[expr {et == ET_DIR}]} {
-    set entry FileEntry $rel $st_mode $st_mtime 0 [list] 0 $ET_DIR [expr {meta_obj ? ::dumps $json $meta_obj $ensure_ascii= : ""}]
+if {[expr {$et == $ET_DIR}]} {
+    set entry FileEntry $rel $st_mode $st_mtime 0 [list] 0 $ET_DIR [expr {$meta_obj ? ::dumps $json $meta_obj $ensure_ascii= : ""}]
     [lappend ::entries $toc $entry]
     if {[expr {::level $LOGGER >= [lindex ::LEVELS $VLog "trace"]}]} {
         ::trace $LOGGER "Discovered directory {rel}"
     }
     # pass
 }
-if {[expr {[expr {et == ET_SYMLINK}] and LIN}]} {
+if {[expr {[expr {$et == $ET_SYMLINK}] and $LIN}]} {
     set target ::readlink $os $rel
     ::__setitem__ $meta_obj "link_target" $target
     set entry FileEntry $rel $st_mode $st_mtime 0 [list] 0 $ET_SYMLINK ::dumps $json $meta_obj $ensure_ascii=
@@ -744,9 +744,9 @@ if {[expr {[expr {et == ET_SYMLINK}] and LIN}]} {
     }
     # pass
 }
-if {[expr {[expr {LIN and [expr {et == ET_FILE}]}] and [expr {getattr $st "st_nlink" 1 > 1}]}]} {
+if {[expr {[expr {$LIN and [expr {$et == $ET_FILE}]}] and [expr {getattr $st "st_nlink" 1 > 1}]}]} {
     set key_hl hl_key $st
-    if {[expr {key_hl in hardlinks}]} {
+    if {[expr {$key_hl in $hardlinks}]} {
         ::__setitem__ $meta_obj "hardlink_to" [lindex $hardlinks $key_hl]
         set entry FileEntry $rel $st_mode $st_mtime 0 [list] 0 $ET_HARDLINK ::dumps $json $meta_obj $ensure_ascii=
         [lappend ::entries $toc $entry]
@@ -759,20 +759,20 @@ if {[expr {[expr {LIN and [expr {et == ET_FILE}]}] and [expr {getattr $st "st_nl
     }
 }
 set size int ::st_size $st
-if {[expr {[expr {LIN and ::sparse $args}] and ::S_ISREG $stat ::st_mode $st}]} {
+if {[expr {[expr {$LIN and ::sparse $args}] and ::S_ISREG $stat ::st_mode $st}]} {
     set holes detect_sparse $rel
     if {$holes} {
         ::__setitem__ $meta_obj "holes" $holes
     }
 }
-set meta_bytes [expr {meta_obj ? ::dumps $json $meta_obj $ensure_ascii= : ""}]
-if {[expr {::flags $header & F_SOLID}]} {
+set meta_bytes [expr {$meta_obj ? ::dumps $json $meta_obj $ensure_ascii= : ""}]
+if {[expr {::flags $header & $F_SOLID}]} {
     if {[expr {::level $LOGGER >= [lindex ::LEVELS $VLog "debug"]}]} {
         ::debug $LOGGER "Queuing file {rel} ({human_bytes(size)}) for solid stream"
     }
     set t0 ::time $time
     open $rel "rb"
-    set duration [expr {::time $time - t0}]
+    set duration [expr {::time $time - $t0}]
     ::add_file $prog $size $duration
     set _tuple ::estimate $prog
     lassign $_tuple elapsed eta rate ratio
@@ -781,7 +781,7 @@ if {[expr {::flags $header & F_SOLID}]} {
         ::debug $LOGGER "Queued {rel} in {duration:.2f}s | {prog.done_files}/{prog.total_files} files, {human_bytes(prog.done_bytes)}/{human_bytes(prog.total_bytes)} | arch {human_bytes(arch_so_far)} | elapsed {elapsed:.1f}s | eta {('∞' if eta==float('inf') else f'{eta:.1f}s')}"
     }
     set entry FileEntry $rel $st_mode $st_mtime $size [list] $cur_off $ET_FILE $meta_bytes
-    set cur_off [expr {cur_off + size}]
+    set cur_off [expr {$cur_off + $size}]
     [lappend ::entries $toc $entry]
 } else {
     if {[expr {::level $LOGGER >= [lindex ::LEVELS $VLog "debug"]}]} {
@@ -790,19 +790,19 @@ if {[expr {::flags $header & F_SOLID}]} {
     set t0 ::time $time
     set entry FileEntry $rel $st_mode $st_mtime $size [list] 0 $ET_FILE $meta_bytes
     open $rel "rb"
-    set duration [expr {::time $time - t0}]
+    set duration [expr {::time $time - $t0}]
     [lappend ::entries $toc $entry]
     ::add_file $prog $size $duration
     set arch_so_far ::tell $bw
     set _tuple ::estimate $prog
     lassign $_tuple elapsed eta rate ratio
     if {[expr {::level $LOGGER >= [lindex ::LEVELS $VLog "debug"]}]} {
-        set saved max 0 [expr {::done_bytes $prog - arch_so_far}]
-        set ratio_now [expr {::done_bytes $prog ? [expr {arch_so_far / ::done_bytes $prog}] : 0}]
+        set saved max 0 [expr {::done_bytes $prog - $arch_so_far}]
+        set ratio_now [expr {::done_bytes $prog ? [expr {$arch_so_far / ::done_bytes $prog}] : 0}]
         ::debug $LOGGER "Done {rel} in {duration:.2f}s | {prog.done_files}/{prog.total_files} files, {human_bytes(prog.done_bytes)}/{human_bytes(prog.total_bytes)} | arch {human_bytes(arch_so_far)} | saved {human_bytes(saved)} | ratio {ratio_now:.3f} | elapsed {elapsed:.1f}s | eta {('∞' if eta==float('inf') else f'{eta:.1f}s')}"
     }
 }
-if {[expr {::flags $header & F_SOLID}]} {
+if {[expr {::flags $header & $F_SOLID}]} {
     set whole ::getvalue $solid_buffer
     if {[expr {::solid_chunk_exp $args is not ""}]} {
         set seg_size [expr {1 << int ::solid_chunk_exp $args}]
@@ -811,34 +811,34 @@ if {[expr {::flags $header & F_SOLID}]} {
         }
         set pos 0
         set total len $whole
-        while {[expr {pos < total}]} {
-            set seg [string range $whole $pos [expr {pos + seg_size}]]
-            set pos [expr {pos + len $seg}]
+        while {[expr {$pos < $total}]} {
+            set seg [string range $whole $pos [expr {$pos + $seg_size}]]
+            set pos [expr {$pos + len $seg}]
             set comp compress_block $method ::level $args $seg
-            set payload [expr {[expr {key is ""}] ? comp : aead_encrypt $key $header $block_index $comp $aad=}]
+            set payload [expr {[expr {$key is ""}] ? $comp : aead_encrypt $key $header $block_index $comp $aad=}]
             ::write $bw ::pack $struct "<I" len $payload
             ::write $bw ::pack $struct "<B" $method
             ::write $bw $payload
-            hasher_update $hasher [expr {[expr {::pack $struct "<I" len $payload + ::pack $struct "<B" $method}] + payload}] default_hash_kind
-            set block_index [expr {block_index + 1}]
+            hasher_update $hasher [expr {[expr {::pack $struct "<I" len $payload + ::pack $struct "<B" $method}] + $payload}] default_hash_kind
+            set block_index [expr {$block_index + 1}]
         }
     } else {
         set comp compress_block $method ::level $args $whole
-        set payload [expr {[expr {key is ""}] ? comp : aead_encrypt $key $header $block_index $comp $aad=}]
+        set payload [expr {[expr {$key is ""}] ? $comp : aead_encrypt $key $header $block_index $comp $aad=}]
         ::write $bw ::pack $struct "<I" len $payload
         ::write $bw ::pack $struct "<B" $method
         ::write $bw $payload
-        hasher_update $hasher [expr {[expr {::pack $struct "<I" len $payload + ::pack $struct "<B" $method}] + payload}] default_hash_kind
-        set block_index [expr {block_index + 1}]
+        hasher_update $hasher [expr {[expr {::pack $struct "<I" len $payload + ::pack $struct "<B" $method}] + $payload}] default_hash_kind
+        set block_index [expr {$block_index + 1}]
     }
     set arch_so_far ::tell $bw
-    set saved max 0 [expr {::done_bytes $prog - arch_so_far}]
-    set ratio_now [expr {::done_bytes $prog ? [expr {arch_so_far / ::done_bytes $prog}] : 0}]
+    set saved max 0 [expr {::done_bytes $prog - $arch_so_far}]
+    set ratio_now [expr {::done_bytes $prog ? [expr {$arch_so_far / ::done_bytes $prog}] : 0}]
     ::info $LOGGER "Solid stream written | arch {human_bytes(arch_so_far)} | src {human_bytes(prog.done_bytes)} | saved {human_bytes(saved)} | ratio {ratio_now:.3f}"
 }
 set toc_data ::pack $toc $solid=
 ::trace $LOGGER "Writing TOC..."
-if {[expr {key is not ""}]} {
+if {[expr {$key is not ""}]} {
     set toc_data aead_encrypt $key $header -1 $toc_data $aad=
 }
 set toc_off ::tell $bw
@@ -850,8 +850,8 @@ write_footer $bw $toc_off $toc_sz default_hash_kind $digest
 set arch_final ::tell $bw
 set _tuple ::estimate $prog
 lassign $_tuple elapsed eta rate ratio
-set saved max 0 [expr {::done_bytes $prog - arch_final}]
-set ratio_final [expr {::done_bytes $prog ? [expr {arch_final / ::done_bytes $prog}] : 0}]
+set saved max 0 [expr {::done_bytes $prog - $arch_final}]
+set ratio_final [expr {::done_bytes $prog ? [expr {$arch_final / ::done_bytes $prog}] : 0}]
 ::info $LOGGER "Done in {elapsed:.2f}s | files {prog.done_files}/{prog.total_files} | src {human_bytes(prog.done_bytes)} | arch {human_bytes(arch_final)} | saved {human_bytes(saved)} | ratio {ratio_final:.3f}"
 puts "Created {args.output} with {len(toc.entries)} entry(s). Solid={bool(header.flags & F_SOLID)}"
 proc cmd_list {args} {
@@ -866,12 +866,12 @@ proc cmd_extract {args} {
     ::mkdir $outdir $parents= $exist_ok=
     open ::archive $args "rb"
 }
-set dirs [list [foreach e ::entries $toc {if {[expr {::entry_type $e == ET_DIR}]} {lappend _result $e}}]
-set syms [list [foreach e ::entries $toc {if {[expr {::entry_type $e == ET_SYMLINK}]} {lappend _result $e}}]
-set hlinks [list [foreach e ::entries $toc {if {[expr {::entry_type $e == ET_HARDLINK}]} {lappend _result $e}}]
-set files [list [foreach e ::entries $toc {if {[expr {::entry_type $e == ET_FILE}]} {lappend _result $e}}]
+set dirs [list [foreach e ::entries $toc {if {[expr {::entry_type $e == $ET_DIR}]} {lappend _result $e}}]
+set syms [list [foreach e ::entries $toc {if {[expr {::entry_type $e == $ET_SYMLINK}]} {lappend _result $e}}]
+set hlinks [list [foreach e ::entries $toc {if {[expr {::entry_type $e == $ET_HARDLINK}]} {lappend _result $e}}]
+set files [list [foreach e ::entries $toc {if {[expr {::entry_type $e == $ET_FILE}]} {lappend _result $e}}]
 foreach e $dirs {
-    set out_path [expr {outdir / ::path $e}]
+    set out_path [expr {$outdir / ::path $e}]
     ::mkdir $out_path $parents= $exist_ok=
     # Try block
     ::chmod $os $out_path ::mode $e
@@ -881,13 +881,13 @@ foreach e $dirs {
     ::utime $os $out_path [list ::mtime $e ::mtime $e]
     # Catch Exception
     # pass
-    if {[expr {::meta_json $e and WIN}]} {
+    if {[expr {::meta_json $e and $WIN}]} {
         # Try block
         win_apply_meta str $out_path ::loads $json ::meta_json $e 1
         # Catch Exception
         # pass
     }
-    if {[expr {[expr {::meta_json $e and LIN}] and ::posixmeta $args}]} {
+    if {[expr {[expr {::meta_json $e and $LIN}] and ::posixmeta $args}]} {
         # Try block
         set meta ::loads $json ::meta_json $e
         set pos ::get $meta "posix" [dict create]
@@ -895,8 +895,8 @@ foreach e $dirs {
         ::chown $os $out_path ::get $pos "uid" [expr {- 1}] ::get $pos "gid" [expr {- 1}]
         # Catch Exception
         # pass
-        if {[expr {::xattrs $args and [expr {"xattrs" in meta}]}]} {
-            apply_xattrs str $out_path [dict create [foreach {k v} [set _items [list]; foreach k [dict keys [lindex $meta "xattrs"]] {lappend _items $k [dict get [lindex $meta "xattrs"] $k]}; set _items] {dict set _result $k ::fromhex $bytes $v}]] $follow_symlinks=
+        if {[expr {::xattrs $args and [expr {"xattrs" in $meta}]}]} {
+            apply_xattrs str $out_path [dict create {*}[set _result [dict create]; foreach {k v} [set _items [list]; foreach k [dict keys [lindex $meta "xattrs"]] {lappend _items $k [dict get [lindex $meta "xattrs"] $k]}; set _items] {dict set _result $k ::fromhex $bytes $v}; set _result]] $follow_symlinks=
         }
         if {[expr {::acl $args and ::get $meta "acl"}]} {
             setfacl_restore [lindex $meta "acl"] str $out_path
@@ -907,9 +907,9 @@ foreach e $dirs {
     ::trace $LOGGER "Created directory {e.path}"
 }
 set solid_concat ""
-if {[expr {::flags $header & F_SOLID}]} {
+if {[expr {::flags $header & $F_SOLID}]} {
     set parts [list]
-    while {[expr {::tell $br < toc_off}]} {
+    while {[expr {::tell $br < $toc_off}]} {
         set hdr ::read $br 5
         if {[expr {len $hdr < 5}]} {
             # pass
@@ -917,7 +917,7 @@ if {[expr {::flags $header & F_SOLID}]} {
         set blen [lindex ::unpack $struct "<I" [string range $hdr 0 4] 0]
         set meth [lindex $hdr 4]
         set payload ::read $br $blen
-        if {[expr {key is not ""}]} {
+        if {[expr {$key is not ""}]} {
             set payload aead_decrypt $key $header 0 $payload $aad=
         }
         [lappend $parts decompress_block ::default_method $header $payload]
@@ -925,7 +925,7 @@ if {[expr {::flags $header & F_SOLID}]} {
     set solid_concat [join $parts ""]
 }
 foreach e $syms {
-    set out_path [expr {outdir / ::path $e}]
+    set out_path [expr {$outdir / ::path $e}]
     ::mkdir ::parent $out_path $parents= $exist_ok=
     set target ""
     # Try block
@@ -944,15 +944,15 @@ foreach e $syms {
         ::lchmod $os $out_path ::mode $e
         # Catch Exception
         # pass
-        if {[expr {::posixmeta $args and [expr {"posix" in meta}]}]} {
+        if {[expr {::posixmeta $args and [expr {"posix" in $meta}]}]} {
             set pos [lindex $meta "posix"]
             # Try block
             ::lchown $os $out_path ::get $pos "uid" [expr {- 1}] ::get $pos "gid" [expr {- 1}]
             # Catch Exception
             # pass
         }
-        if {[expr {::xattrs $args and [expr {"xattrs" in meta}]}]} {
-            apply_xattrs str $out_path [dict create [foreach {k v} [set _items [list]; foreach k [dict keys [lindex $meta "xattrs"]] {lappend _items $k [dict get [lindex $meta "xattrs"] $k]}; set _items] {dict set _result $k ::fromhex $bytes $v}]] $follow_symlinks=
+        if {[expr {::xattrs $args and [expr {"xattrs" in $meta}]}]} {
+            apply_xattrs str $out_path [dict create {*}[set _result [dict create]; foreach {k v} [set _items [list]; foreach k [dict keys [lindex $meta "xattrs"]] {lappend _items $k [dict get [lindex $meta "xattrs"] $k]}; set _items] {dict set _result $k ::fromhex $bytes $v}; set _result]] $follow_symlinks=
         }
     }
     # Catch Exception
@@ -960,9 +960,9 @@ foreach e $syms {
     ::trace $LOGGER "Created symlink {e.path} -> {target}"
 }
 foreach e $files {
-    set out_path [expr {outdir / ::path $e}]
+    set out_path [expr {$outdir / ::path $e}]
     ::mkdir ::parent $out_path $parents= $exist_ok=
-    if {[expr {::flags $header & F_SOLID}]} {
+    if {[expr {::flags $header & $F_SOLID}]} {
         set segment [string range $solid_concat ::start_off $e [expr {::start_off $e + ::size $e}]]
         open $out_path "wb"
     } else {
@@ -977,13 +977,13 @@ foreach e $files {
     # Catch Exception
     # pass
 }
-if {[expr {::meta_json $e and WIN}]} {
+if {[expr {::meta_json $e and $WIN}]} {
     # Try block
     win_apply_meta str $out_path ::loads $json ::meta_json $e 0
     # Catch Exception
     # pass
 }
-if {[expr {[expr {::meta_json $e and LIN}] and ::posixmeta $args}]} {
+if {[expr {[expr {::meta_json $e and $LIN}] and ::posixmeta $args}]} {
     # Try block
     set meta ::loads $json ::meta_json $e
     set pos ::get $meta "posix" [dict create]
@@ -991,13 +991,13 @@ if {[expr {[expr {::meta_json $e and LIN}] and ::posixmeta $args}]} {
     ::chown $os $out_path ::get $pos "uid" [expr {- 1}] ::get $pos "gid" [expr {- 1}]
     # Catch Exception
     # pass
-    if {[expr {::xattrs $args and [expr {"xattrs" in meta}]}]} {
-        apply_xattrs str $out_path [dict create [foreach {k v} [set _items [list]; foreach k [dict keys [lindex $meta "xattrs"]] {lappend _items $k [dict get [lindex $meta "xattrs"] $k]}; set _items] {dict set _result $k ::fromhex $bytes $v}]] $follow_symlinks=
+    if {[expr {::xattrs $args and [expr {"xattrs" in $meta}]}]} {
+        apply_xattrs str $out_path [dict create {*}[set _result [dict create]; foreach {k v} [set _items [list]; foreach k [dict keys [lindex $meta "xattrs"]] {lappend _items $k [dict get [lindex $meta "xattrs"] $k]}; set _items] {dict set _result $k ::fromhex $bytes $v}; set _result]] $follow_symlinks=
     }
     if {[expr {::acl $args and ::get $meta "acl"}]} {
         setfacl_restore [lindex $meta "acl"] str $out_path
     }
-    if {[expr {[expr {::sparse $args and [expr {"holes" in meta}]}] and LIN}]} {
+    if {[expr {[expr {::sparse $args and [expr {"holes" in $meta}]}] and $LIN}]} {
         open $out_path "r+b"
     }
     # Catch Exception
@@ -1005,7 +1005,7 @@ if {[expr {[expr {::meta_json $e and LIN}] and ::posixmeta $args}]} {
 }
 ::debug $LOGGER "Extracted {e.path}"
 foreach e $hlinks {
-    set out_path [expr {outdir / ::path $e}]
+    set out_path [expr {$outdir / ::path $e}]
     ::mkdir ::parent $out_path $parents= $exist_ok=
     set target ""
     # Try block
@@ -1015,7 +1015,7 @@ foreach e $hlinks {
     # pass
     # Try block
     if {$target} {
-        set src [expr {outdir / target}]
+        set src [expr {$outdir / $target}]
         if {::exists $src} {
             # Try block
             if {::exists $out_path} {
@@ -1034,13 +1034,13 @@ proc cmd_append {args} {
     open ::archive $args "r+b"
 }
 set items list iter_tree ::inputs $args
-set file_items [list [foreach it $items {if {[expr {[lindex $it 2] == ET_FILE}]} {lappend _result $it}}]
+set file_items [list [foreach it $items {if {[expr {[lindex $it 2] == $ET_FILE}]} {lappend _result $it}}]
 set total_files len $file_items
-set total_bytes sum int getattr $st "st_size" 0 $st [expr {_ in file_items}]
+set total_bytes sum int getattr $st "st_size" 0 $st [expr {$_ in $file_items}]
 set prog Progress $total_files $total_bytes
 ::info $LOGGER "Appending {total_files} files ({human_bytes(total_bytes)})..."
 foreach fp, st, et $items {
-    if {[expr {et != ET_FILE}]} {
+    if {[expr {$et != $ET_FILE}]} {
         ::trace $LOGGER "Skipping non-file during append: {fp}"
         # pass
     }
@@ -1055,32 +1055,32 @@ foreach fp, st, et $items {
     set t0 ::time $time
     open $rel "rb"
     [lappend ::entries $toc $entry]
-    set duration [expr {::time $time - t0}]
+    set duration [expr {::time $time - $t0}]
     ::add_file $prog $size $duration
     set arch_so_far ::tell $f
     set _tuple ::estimate $prog
     lassign $_tuple elapsed eta rate ratio
     if {[expr {::level $LOGGER >= [lindex ::LEVELS $VLog "debug"]}]} {
-        set saved max 0 [expr {::done_bytes $prog - arch_so_far}]
-        set ratio_now [expr {::done_bytes $prog ? [expr {arch_so_far / ::done_bytes $prog}] : 0}]
+        set saved max 0 [expr {::done_bytes $prog - $arch_so_far}]
+        set ratio_now [expr {::done_bytes $prog ? [expr {$arch_so_far / ::done_bytes $prog}] : 0}]
         ::debug $LOGGER "Done {rel} in {duration:.2f}s | {prog.done_files}/{prog.total_files} files, {human_bytes(prog.done_bytes)}/{human_bytes(prog.total_bytes)} | arch {human_bytes(arch_so_far)} | saved {human_bytes(saved)} | ratio {ratio_now:.3f} | elapsed {elapsed:.1f}s | eta {('∞' if eta==float('inf') else f'{eta:.1f}s')}"
     }
 }
 set toc_data ::pack $toc $solid=
 ::trace $LOGGER "Writing updated TOC (append)..."
-if {[expr {key is not ""}]} {
+if {[expr {$key is not ""}]} {
     set toc_data aead_encrypt $key $header -1 $toc_data $aad=
 }
 set toc_new_off ::tell $f
 ::write $f $toc_data
 set toc_new_sz len $toc_data
 set upto ::tell $f
-set digest _recompute_hash_until $f $upto [expr {[expr {hash_kind != H_NONE}] ? hash_kind : default_hash_kind}]
-write_footer $f $toc_new_off $toc_new_sz [expr {[expr {hash_kind != H_NONE}] ? hash_kind : default_hash_kind}] $digest
+set digest _recompute_hash_until $f $upto [expr {[expr {$hash_kind != $H_NONE}] ? $hash_kind : default_hash_kind}]
+write_footer $f $toc_new_off $toc_new_sz [expr {[expr {$hash_kind != $H_NONE}] ? $hash_kind : default_hash_kind}] $digest
 set arch_final ::tell $f
 set _tuple ::estimate $prog
 lassign $_tuple elapsed eta rate ratio
-set saved max 0 [expr {::done_bytes $prog - [expr {arch_final - toc_new_sz}]}]
+set saved max 0 [expr {::done_bytes $prog - [expr {$arch_final - $toc_new_sz}]}]
 ::info $LOGGER "Append done in {elapsed:.2f}s | files {prog.done_files}/{prog.total_files} | added {human_bytes(prog.done_bytes)} | archive now {human_bytes(arch_final)}"
 proc build_argparser {} {
     set ap ::ArgumentParser $argparse $prog= $description=
@@ -1162,6 +1162,6 @@ if {[expr {::cmd $args == "c"}]} {
         }
     }
 }
-if {[expr {__name__ == "__main__"}]} {
+if {[expr {$__name__ == "__main__"}]} {
     main
 }

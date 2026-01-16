@@ -227,10 +227,8 @@ public sealed class TclEmitter
                 return;
 
             case Variable v:
-                if (context == ExprContext.InsideExpr)
-                    sb.Append(v.Name);  // No $ inside expr blocks
-                else
-                    sb.Append("$").Append(v.Name);  // Need $ outside expr blocks
+                // Tcl always needs $ for variable substitution, even inside expr blocks
+                sb.Append("$").Append(v.Name);
                 return;
 
             case ListLiteral l:
@@ -256,6 +254,28 @@ public sealed class TclEmitter
                 return;
 
             case BinaryOp b:
+                // Special case: string repetition in Python (str * int) => [string repeat str int]
+                if (b.Op == "*")
+                {
+                    if (b.Left is Literal { Value: string str })
+                    {
+                        sb.Append("[string repeat ");
+                        sb.Append(FormatLiteral(str));
+                        sb.Append(" ");
+                        EmitExpr(b.Right, sb, ExprContext.Normal);
+                        sb.Append("]");
+                        return;
+                    }
+                    else if (b.Right is Literal { Value: string str2 })
+                    {
+                        sb.Append("[string repeat ");
+                        sb.Append(FormatLiteral(str2));
+                        sb.Append(" ");
+                        EmitExpr(b.Left, sb, ExprContext.Normal);
+                        sb.Append("]");
+                        return;
+                    }
+                }
                 // Tcl uses expr for math/logic
                 sb.Append("[expr {");
                 EmitExpr(b.Left, sb, ExprContext.InsideExpr);
@@ -522,9 +542,8 @@ public sealed class TclEmitter
                 return;
 
             case DictComprehension dc:
-                // Tcl dict comprehension: dict create with foreach
-                sb.Append("[dict create ");
-                sb.Append("[foreach {");
+                // Tcl dict comprehension: Initialize dict, foreach to populate, then return it
+                sb.Append("[dict create {*}[set _result [dict create]; foreach {");
                 // Handle tuple unpacking for loop vars like "k,v"
                 sb.Append(dc.LoopVar.Replace(",", " "));
                 sb.Append("} ");
@@ -542,7 +561,7 @@ public sealed class TclEmitter
                 EmitExpr(dc.ValueExpr, sb, ExprContext.Normal);
                 if (dc.FilterCondition != null)
                     sb.Append("}");
-                sb.Append("}]]");
+                sb.Append("}; set _result]]");
                 return;
 
             case LambdaExpr lam:
