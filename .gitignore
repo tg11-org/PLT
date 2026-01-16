@@ -56,3 +56,5 @@ examples/out/
 # Misc
 # ======================
 *.log
+
+*.tmp
