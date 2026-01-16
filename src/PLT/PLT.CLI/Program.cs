@@ -4,12 +4,13 @@ using PLT.CORE.Backends.C;
 using PLT.CORE.Backends.Tcl;
 using PLT.CORE.Frontends.Js;
 using PLT.CORE.Frontends.Python;
+using PLT.CORE.Frontends.CSharp;
 
 
 static void Usage()
 {
     Console.WriteLine("Usage:");
-    Console.WriteLine("  plt --from <js|py> --to <python|c|tcl> <input> [-o out]");
+    Console.WriteLine("  plt --from <js|py|cs> --to <python|c|tcl> <input> [-o out]");
     Console.WriteLine("  --print-ir      Print the IR before emitting output");
     Console.WriteLine();
     Console.WriteLine("Examples:");
@@ -68,9 +69,9 @@ if (!File.Exists(inputPath))
 }
 
 // Parse based on frontend
-if (from != "js" && from != "py")
+if (from != "js" && from != "py" && from != "cs")
 {
-    Console.WriteLine($"Unsupported --from {from} (supported: 'js', 'py')");
+    Console.WriteLine($"Unsupported --from {from} (supported: 'js', 'py', 'cs')");
     return;
 }
 
@@ -79,6 +80,7 @@ var ir = from switch
 {
     "js" => MiniJsFrontend.ParseConsoleLogHelloWorld(source),
     "py" => PythonFrontend.Parse(source),
+    "cs" => CSharpFrontend.Parse(source),
     _ => throw new Exception($"Unknown frontend: {from}")
 };
 
