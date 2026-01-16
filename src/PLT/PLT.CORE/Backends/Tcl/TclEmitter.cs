@@ -324,15 +324,137 @@ public sealed class TclEmitter
                 }
                 else
                 {
-                    // Treat as namespace call
-                    sb.Append("::");
-                    sb.Append(m.MethodName);
-                    sb.Append(" ");
-                    EmitExpr(m.Target, sb, ExprContext.Normal);
-                    for (int j = 0; j < m.Args.Count; j++)
+                    // Check for known Python standard library patterns
+                    // platform.system() -> $::tcl_platform(os)
+                    if (m.Target is Variable { Name: "platform" } && m.MethodName == "system")
                     {
+                        sb.Append("$::tcl_platform(os)");
+                    }
+                    // sys.platform -> $::tcl_platform(platform)
+                    else if (m.Target is Variable { Name: "sys" } && m.MethodName == "platform")
+                    {
+                        sb.Append("$::tcl_platform(platform)");
+                    }
+                    // str.startswith() -> [string match]
+                    else if (m.MethodName == "startswith")
+                    {
+                        sb.Append("[string match ");
+                        // For string literals, we need to build the pattern with asterisk inside quotes
+                        if (m.Args[0] is Literal { Value: string literalStr })
+                        {
+                            // Escape backslashes in the literal for Tcl
+                            var escaped = literalStr.Replace("\\", "\\\\");
+                            sb.Append($"\"{escaped}*\"");
+                        }
+                        else
+                        {
+                            // For expressions, concatenate with asterisk
+                            sb.Append("\"");
+                            EmitExpr(m.Args[0], sb, ExprContext.Normal);
+                            sb.Append("*\"");
+                        }
                         sb.Append(" ");
-                        EmitExpr(m.Args[j], sb, ExprContext.Normal);
+                        EmitExpr(m.Target, sb, ExprContext.Normal);
+                        sb.Append("]");
+                    }
+                    // str.endswith() -> [string match]
+                    else if (m.MethodName == "endswith")
+                    {
+                        sb.Append("[string match ");
+                        // For string literals, we need to build the pattern with asterisk inside quotes
+                        if (m.Args[0] is Literal { Value: string literalStr })
+                        {
+                            // Escape backslashes in the literal for Tcl
+                            var escaped = literalStr.Replace("\\", "\\\\");
+                            sb.Append($"\"*{escaped}\"");
+                        }
+                        else
+                        {
+                            // For expressions, concatenate with asterisk
+                            sb.Append("\"*");
+                            EmitExpr(m.Args[0], sb, ExprContext.Normal);
+                            sb.Append("\"");
+                        }
+                        EmitExpr(m.Args[0], sb, ExprContext.Normal);
+                        sb.Append(" ");
+                        EmitExpr(m.Target, sb, ExprContext.Normal);
+                        sb.Append("]");
+                    }
+                    // str.split() -> [split]
+                    else if (m.MethodName == "split")
+                    {
+                        sb.Append("[split ");
+                        EmitExpr(m.Target, sb, ExprContext.Normal);
+                        if (m.Args.Count > 0)
+                        {
+                            sb.Append(" ");
+                            EmitExpr(m.Args[0], sb, ExprContext.Normal);
+                        }
+                        sb.Append("]");
+                    }
+                    // str.join() -> [join]
+                    else if (m.MethodName == "join")
+                    {
+                        sb.Append("[join ");
+                        EmitExpr(m.Args[0], sb, ExprContext.Normal);
+                        sb.Append(" ");
+                        EmitExpr(m.Target, sb, ExprContext.Normal);
+                        sb.Append("]");
+                    }
+                    // str.upper() -> [string toupper]
+                    else if (m.MethodName == "upper")
+                    {
+                        sb.Append("[string toupper ");
+                        EmitExpr(m.Target, sb, ExprContext.Normal);
+                        sb.Append("]");
+                    }
+                    // str.lower() -> [string tolower]
+                    else if (m.MethodName == "lower")
+                    {
+                        sb.Append("[string tolower ");
+                        EmitExpr(m.Target, sb, ExprContext.Normal);
+                        sb.Append("]");
+                    }
+                    // str.replace() -> [string map]
+                    else if (m.MethodName == "replace")
+                    {
+                        sb.Append("[string map {");
+                        EmitExpr(m.Args[0], sb, ExprContext.Normal);
+                        sb.Append(" ");
+                        EmitExpr(m.Args[1], sb, ExprContext.Normal);
+                        sb.Append("} ");
+                        EmitExpr(m.Target, sb, ExprContext.Normal);
+                        sb.Append("]");
+                    }
+                    // str.strip() -> [string trim]
+                    else if (m.MethodName == "strip")
+                    {
+                        sb.Append("[string trim ");
+                        EmitExpr(m.Target, sb, ExprContext.Normal);
+                        sb.Append("]");
+                    }
+                    // str.encode() -> bytes (just return as-is for now)
+                    else if (m.MethodName == "encode")
+                    {
+                        EmitExpr(m.Target, sb, ExprContext.Normal);
+                    }
+                    // bytes.decode() -> string (just return as-is for now)
+                    else if (m.MethodName == "decode")
+                    {
+                        EmitExpr(m.Target, sb, ExprContext.Normal);
+                    }
+                    // Default: treat as namespace call (may not work but preserve attempt)
+                    else
+                    {
+                        sb.Append("::");
+                        sb.Append(m.MethodName);
+                        sb.Append(" ");
+                        EmitExpr(m.Target, sb, ExprContext.Normal);
+                        for (int j = 0; j < m.Args.Count; j++)
+                        {
+                            sb.Append(" ");
+                            EmitExpr(m.Args[j], sb, ExprContext.Normal);
+                        }
                     }
                 }
                 return;
