@@ -35,3 +35,18 @@ def main():
         print("File not found")
 
 main()
+
+
+class Test:
+    def __init__(self):
+        print("Test initialized")
+
+    def run_tests(self):
+        print("Running tests...")
+        result = True
+        return result
+
+class DataProcessor:
+    def process(self, data):
+        print("Processing data")
+        return data

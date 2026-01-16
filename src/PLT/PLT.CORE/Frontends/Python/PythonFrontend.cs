@@ -337,6 +337,7 @@ internal class PythonParser
                 "import" => ParseImportStatement(),
                 "from" => ParseFromImportStatement(),
                 "return" => ParseReturnStatement(),
+                "class" => ParseClassDef(),
                 "if" => ParseIfStatement(),
                 "for" => ParseForStatement(),
                 "while" => ParseWhileStatement(),
@@ -469,6 +470,33 @@ internal class PythonParser
         if (Check(TokenType.DEDENT)) Advance();
 
         return new WhileStmt(condition, body);
+    }
+
+    private ClassDefStmt ParseClassDef()
+    {
+        Consume(TokenType.KEYWORD, "Expected 'class'");
+        var className = Consume(TokenType.IDENTIFIER, "Expected class name").Value;
+        
+        // Skip optional base classes
+        if (Match(TokenType.LPAREN))
+        {
+            int parenDepth = 1;
+            while (parenDepth > 0 && !IsAtEnd())
+            {
+                if (Check(TokenType.LPAREN)) parenDepth++;
+                else if (Check(TokenType.RPAREN)) parenDepth--;
+                Advance();
+            }
+        }
+        
+        Consume(TokenType.COLON, "Expected ':'");
+        SkipNewlines();
+        Consume(TokenType.INDENT, "Expected indented block");
+
+        var body = ParseIndentedBlock();
+        if (Check(TokenType.DEDENT)) Advance();
+
+        return new ClassDefStmt(className, body);
     }
 
     private FunctionDefStmt ParseFunctionDef()

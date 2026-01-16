@@ -103,6 +103,14 @@ public sealed class CEmitter
                 sb.AppendLine("}");
                 break;
 
+            case ClassDefStmt c:
+                if (!string.IsNullOrWhiteSpace(c.LeadingComment))
+                    sb.AppendLine($"{pad}// {c.LeadingComment}");
+                sb.AppendLine($"{pad}// Class {c.ClassName}");
+                foreach (var s in c.Body)
+                    EmitStmt(s, sb, indent);
+                break;
+
             default:
                 throw new NotSupportedException($"Unsupported stmt: {stmt.GetType().Name}");
         }
