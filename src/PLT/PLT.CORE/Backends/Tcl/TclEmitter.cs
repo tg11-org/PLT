@@ -375,7 +375,6 @@ public sealed class TclEmitter
                             EmitExpr(m.Args[0], sb, ExprContext.Normal);
                             sb.Append("\"");
                         }
-                        EmitExpr(m.Args[0], sb, ExprContext.Normal);
                         sb.Append(" ");
                         EmitExpr(m.Target, sb, ExprContext.Normal);
                         sb.Append("]");
@@ -442,6 +441,36 @@ public sealed class TclEmitter
                     else if (m.MethodName == "decode")
                     {
                         EmitExpr(m.Target, sb, ExprContext.Normal);
+                    }
+                    // dict.items() -> Build a list compatible with foreach {k v} iteration
+                    // Returns alternating key-value pairs in a flat list
+                    else if (m.MethodName == "items")
+                    {
+                        // Use foreach to build alternating key-value list
+                        sb.Append("[set _items [list]; foreach k [dict keys ");
+                        EmitExpr(m.Target, sb, ExprContext.Normal);
+                        sb.Append("] {lappend _items $k [dict get ");
+                        EmitExpr(m.Target, sb, ExprContext.Normal);
+                        sb.Append(" $k]}; set _items]");
+                    }
+                    // dict.keys() -> [dict keys]
+                    else if (m.MethodName == "keys")
+                    {
+                        sb.Append("[dict keys ");
+                        EmitExpr(m.Target, sb, ExprContext.Normal);
+                        sb.Append("]");
+                    }
+                    // list.append() -> [lappend varname value]
+                    else if (m.MethodName == "append")
+                    {
+                        sb.Append("[lappend ");
+                        EmitExpr(m.Target, sb, ExprContext.Normal);
+                        if (m.Args.Count > 0)
+                        {
+                            sb.Append(" ");
+                            EmitExpr(m.Args[0], sb, ExprContext.Normal);
+                        }
+                        sb.Append("]");
                     }
                     // Default: treat as namespace call (may not work but preserve attempt)
                     else

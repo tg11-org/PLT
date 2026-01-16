@@ -22,7 +22,7 @@ set HAVE_BLAKE3 0
 # Catch Exception
 set HAVE_XXH 0
 set WIN [expr {$::tcl_platform(os) == "Windows"}]
-set LIN [string match "linux"* $::tcl_platform(platform)]
+set LIN [string match "linux*" $::tcl_platform(platform)]
 if {$WIN} {
     # Try block
     set HAVE_WIN32 1
@@ -111,7 +111,7 @@ set M_LZMA 2
 set M_BROTLI 3
 set M_ZSTD 4
 set METHOD_NAMES [dict create $M_NONE "none" $M_ZLIB "zlib" $M_LZMA "lzma" $M_BROTLI "brotli" $M_ZSTD "zstd"]
-set NAME_TO_METHOD [dict create [foreach {k v} ::items $METHOD_NAMES {dict set _result $v $k}]]
+set NAME_TO_METHOD [dict create [foreach {k v} [set _items [list]; foreach k [dict keys $METHOD_NAMES] {lappend _items $k [dict get $METHOD_NAMES $k]}; set _items] {dict set _result $v $k}]]
 set F_ENCRYPTED [expr {1 << 0}]
 set F_SOLID [expr {1 << 1}]
 set H_NONE 0
@@ -295,10 +295,10 @@ proc unpack {cls data solid} {
                 lassign $_tuple csz
                 set _tuple ::unpack $struct "<B" ::read $bio 1
                 lassign $_tuple meth
-                ::append $blocks [list $idx $usz $csz $meth]
+                [lappend $blocks [list $idx $usz $csz $meth]]
             }
         }
-        ::append $entries FileEntry $path $mode $mtime $size $blocks $start_off $entry_type [expr {meta or ""}]
+        [lappend $entries FileEntry $path $mode $mtime $size $blocks $start_off $entry_type [expr {meta or ""}]]
     }
     cls $entries
 }
@@ -463,7 +463,7 @@ proc list_xattrs {path follow_symlinks} {
 }
 proc apply_xattrs {path xattrs follow_symlinks} {
     if {hasattr $os "setxattr"} {
-        foreach n, v ::items $xattrs {
+        foreach n, v [set _items [list]; foreach k [dict keys $xattrs] {lappend _items $k [dict get $xattrs $k]}; set _items] {
             # Try block
             ::setxattr $os $path $n $v $follow_symlinks=follow_symlinks
             # Catch Exception
@@ -551,7 +551,7 @@ proc win_capture_meta {path} {
         # Try block
         open [expr {path + name}] "rb"
         # Catch Exception
-        ::append $ads [dict create "name" $name "hex" ""]
+        [lappend $ads [dict create "name" $name "hex" ""]]
     }
     # Catch Exception
     # pass
@@ -716,7 +716,7 @@ if {[expr {WIN and ::winmeta $args}]} {
 if {[expr {LIN and ::xattrs $args}]} {
     set x list_xattrs $rel $follow_symlinks=
     if {$x} {
-        ::__setitem__ $meta_obj "xattrs" [dict create [foreach {k v} ::items $x {dict set _result $k ::hex $v}]]
+        ::__setitem__ $meta_obj "xattrs" [dict create [foreach {k v} [set _items [list]; foreach k [dict keys $x] {lappend _items $k [dict get $x $k]}; set _items] {dict set _result $k ::hex $v}]]
     }
 }
 if {[expr {LIN and ::selinux $args}]} {
@@ -728,7 +728,7 @@ if {[expr {LIN and ::selinux $args}]} {
 }
 if {[expr {et == ET_DIR}]} {
     set entry FileEntry $rel $st_mode $st_mtime 0 [list] 0 $ET_DIR [expr {meta_obj ? ::dumps $json $meta_obj $ensure_ascii= : ""}]
-    ::append ::entries $toc $entry
+    [lappend ::entries $toc $entry]
     if {[expr {::level $LOGGER >= [lindex ::LEVELS $VLog "trace"]}]} {
         ::trace $LOGGER "Discovered directory {rel}"
     }
@@ -738,7 +738,7 @@ if {[expr {[expr {et == ET_SYMLINK}] and LIN}]} {
     set target ::readlink $os $rel
     ::__setitem__ $meta_obj "link_target" $target
     set entry FileEntry $rel $st_mode $st_mtime 0 [list] 0 $ET_SYMLINK ::dumps $json $meta_obj $ensure_ascii=
-    ::append ::entries $toc $entry
+    [lappend ::entries $toc $entry]
     if {[expr {::level $LOGGER >= [lindex ::LEVELS $VLog "trace"]}]} {
         ::trace $LOGGER "Recorded symlink {rel} -> {target}"
     }
@@ -749,7 +749,7 @@ if {[expr {[expr {LIN and [expr {et == ET_FILE}]}] and [expr {getattr $st "st_nl
     if {[expr {key_hl in hardlinks}]} {
         ::__setitem__ $meta_obj "hardlink_to" [lindex $hardlinks $key_hl]
         set entry FileEntry $rel $st_mode $st_mtime 0 [list] 0 $ET_HARDLINK ::dumps $json $meta_obj $ensure_ascii=
-        ::append ::entries $toc $entry
+        [lappend ::entries $toc $entry]
         if {[expr {::level $LOGGER >= [lindex ::LEVELS $VLog "trace"]}]} {
             ::trace $LOGGER "Recorded hardlink {rel} -> {hardlinks[key_hl]}"
         }
@@ -782,7 +782,7 @@ if {[expr {::flags $header & F_SOLID}]} {
     }
     set entry FileEntry $rel $st_mode $st_mtime $size [list] $cur_off $ET_FILE $meta_bytes
     set cur_off [expr {cur_off + size}]
-    ::append ::entries $toc $entry
+    [lappend ::entries $toc $entry]
 } else {
     if {[expr {::level $LOGGER >= [lindex ::LEVELS $VLog "debug"]}]} {
         ::debug $LOGGER "Compressing file {rel} ({human_bytes(size)})"
@@ -791,7 +791,7 @@ if {[expr {::flags $header & F_SOLID}]} {
     set entry FileEntry $rel $st_mode $st_mtime $size [list] 0 $ET_FILE $meta_bytes
     open $rel "rb"
     set duration [expr {::time $time - t0}]
-    ::append ::entries $toc $entry
+    [lappend ::entries $toc $entry]
     ::add_file $prog $size $duration
     set arch_so_far ::tell $bw
     set _tuple ::estimate $prog
@@ -896,7 +896,7 @@ foreach e $dirs {
         # Catch Exception
         # pass
         if {[expr {::xattrs $args and [expr {"xattrs" in meta}]}]} {
-            apply_xattrs str $out_path [dict create [foreach {k v} ::items [lindex $meta "xattrs"] {dict set _result $k ::fromhex $bytes $v}]] $follow_symlinks=
+            apply_xattrs str $out_path [dict create [foreach {k v} [set _items [list]; foreach k [dict keys [lindex $meta "xattrs"]] {lappend _items $k [dict get [lindex $meta "xattrs"] $k]}; set _items] {dict set _result $k ::fromhex $bytes $v}]] $follow_symlinks=
         }
         if {[expr {::acl $args and ::get $meta "acl"}]} {
             setfacl_restore [lindex $meta "acl"] str $out_path
@@ -920,7 +920,7 @@ if {[expr {::flags $header & F_SOLID}]} {
         if {[expr {key is not ""}]} {
             set payload aead_decrypt $key $header 0 $payload $aad=
         }
-        ::append $parts decompress_block ::default_method $header $payload
+        [lappend $parts decompress_block ::default_method $header $payload]
     }
     set solid_concat [join $parts ""]
 }
@@ -952,7 +952,7 @@ foreach e $syms {
             # pass
         }
         if {[expr {::xattrs $args and [expr {"xattrs" in meta}]}]} {
-            apply_xattrs str $out_path [dict create [foreach {k v} ::items [lindex $meta "xattrs"] {dict set _result $k ::fromhex $bytes $v}]] $follow_symlinks=
+            apply_xattrs str $out_path [dict create [foreach {k v} [set _items [list]; foreach k [dict keys [lindex $meta "xattrs"]] {lappend _items $k [dict get [lindex $meta "xattrs"] $k]}; set _items] {dict set _result $k ::fromhex $bytes $v}]] $follow_symlinks=
         }
     }
     # Catch Exception
@@ -992,7 +992,7 @@ if {[expr {[expr {::meta_json $e and LIN}] and ::posixmeta $args}]} {
     # Catch Exception
     # pass
     if {[expr {::xattrs $args and [expr {"xattrs" in meta}]}]} {
-        apply_xattrs str $out_path [dict create [foreach {k v} ::items [lindex $meta "xattrs"] {dict set _result $k ::fromhex $bytes $v}]] $follow_symlinks=
+        apply_xattrs str $out_path [dict create [foreach {k v} [set _items [list]; foreach k [dict keys [lindex $meta "xattrs"]] {lappend _items $k [dict get [lindex $meta "xattrs"] $k]}; set _items] {dict set _result $k ::fromhex $bytes $v}]] $follow_symlinks=
     }
     if {[expr {::acl $args and ::get $meta "acl"}]} {
         setfacl_restore [lindex $meta "acl"] str $out_path
@@ -1054,7 +1054,7 @@ foreach fp, st, et $items {
     }
     set t0 ::time $time
     open $rel "rb"
-    ::append ::entries $toc $entry
+    [lappend ::entries $toc $entry]
     set duration [expr {::time $time - t0}]
     ::add_file $prog $size $duration
     set arch_so_far ::tell $f
