@@ -11,6 +11,8 @@ public record ExprStmt(Expr Expr, string? LeadingComment = null) : Stmt;
 
 public record VarAssignment(string VarName, Expr Value, string? LeadingComment = null) : Stmt;
 
+public record TupleUnpackingAssignment(IReadOnlyList<string> VarNames, Expr Value, string? LeadingComment = null) : Stmt;
+
 public record IfStmt(Expr Condition, IReadOnlyList<Stmt> ThenBody, IReadOnlyList<Stmt>? ElseBody = null, string? LeadingComment = null) : Stmt;
 
 public record ForEachStmt(string LoopVar, Expr IterableExpr, IReadOnlyList<Stmt> Body, string? LeadingComment = null) : Stmt;
@@ -41,6 +43,8 @@ public record ListLiteral(IReadOnlyList<Expr> Elements) : Expr;
 public record DictLiteral(IReadOnlyList<(Expr Key, Expr Value)> Items) : Expr;
 
 public record ListComprehension(Expr Element, string LoopVar, Expr IterableExpr, Expr? FilterCondition = null) : Expr;
+
+public record DictComprehension(Expr KeyExpr, Expr ValueExpr, string LoopVar, Expr IterableExpr, Expr? FilterCondition = null) : Expr;
 
 public record LambdaExpr(IReadOnlyList<string> Parameters, Expr Body) : Expr;
 

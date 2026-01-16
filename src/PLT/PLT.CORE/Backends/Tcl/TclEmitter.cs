@@ -13,6 +13,12 @@ public sealed class TclEmitter
         return sb.ToString();
     }
 
+    private enum ExprContext
+    {
+        Normal,       // Variables need $prefix
+        InsideExpr    // Variables don't need $prefix (inside [expr {...}])
+    }
+
     private static void EmitStmt(Stmt stmt, StringBuilder sb, int indent)
     {
         var pad = new string(' ', indent * 4);
@@ -23,7 +29,7 @@ public sealed class TclEmitter
                 if (!string.IsNullOrWhiteSpace(s.LeadingComment))
                     sb.AppendLine($"{pad}# {s.LeadingComment}");
                 sb.Append(pad);
-                EmitExpr(s.Expr, sb);
+                EmitExpr(s.Expr, sb, ExprContext.Normal);
                 sb.AppendLine();
                 break;
 
@@ -34,7 +40,26 @@ public sealed class TclEmitter
                 sb.Append("set ");
                 sb.Append(v.VarName);
                 sb.Append(" ");
-                EmitExpr(v.Value, sb);
+                EmitExpr(v.Value, sb, ExprContext.Normal);
+                sb.AppendLine();
+                break;
+
+            case TupleUnpackingAssignment t:
+                if (!string.IsNullOrWhiteSpace(t.LeadingComment))
+                    sb.AppendLine($"{pad}# {t.LeadingComment}");
+                // Emit: set varlist [expr_value]
+                // Then: lassign $varlist var1 var2 ...
+                sb.Append(pad);
+                sb.Append("set _tuple ");
+                EmitExpr(t.Value, sb, ExprContext.Normal);
+                sb.AppendLine();
+                sb.Append(pad);
+                sb.Append("lassign $_tuple");
+                foreach (var varName in t.VarNames)
+                {
+                    sb.Append(" ");
+                    sb.Append(varName);
+                }
                 sb.AppendLine();
                 break;
 
@@ -43,7 +68,7 @@ public sealed class TclEmitter
                     sb.AppendLine($"{pad}# {i.LeadingComment}");
                 sb.Append(pad);
                 sb.Append("if {");
-                EmitExpr(i.Condition, sb);
+                EmitExpr(i.Condition, sb, ExprContext.Normal);
                 sb.AppendLine("} {");
                 foreach (var s in i.ThenBody)
                     EmitStmt(s, sb, indent + 1);
@@ -63,7 +88,7 @@ public sealed class TclEmitter
                 sb.Append("foreach ");
                 sb.Append(f.LoopVar);
                 sb.Append(" ");
-                EmitExpr(f.IterableExpr, sb);
+                EmitExpr(f.IterableExpr, sb, ExprContext.Normal);
                 sb.AppendLine(" {");
                 foreach (var s in f.Body)
                     EmitStmt(s, sb, indent + 1);
@@ -75,7 +100,7 @@ public sealed class TclEmitter
                     sb.AppendLine($"{pad}# {w.LeadingComment}");
                 sb.Append(pad);
                 sb.Append("while {");
-                EmitExpr(w.Condition, sb);
+                EmitExpr(w.Condition, sb, ExprContext.Normal);
                 sb.AppendLine("} {");
                 foreach (var s in w.Body)
                     EmitStmt(s, sb, indent + 1);
@@ -141,7 +166,7 @@ public sealed class TclEmitter
         }
     }
 
-    private static void EmitExpr(Expr expr, StringBuilder sb)
+    private static void EmitExpr(Expr expr, StringBuilder sb, ExprContext context = ExprContext.Normal)
     {
         switch (expr)
         {
@@ -149,7 +174,7 @@ public sealed class TclEmitter
                 sb.Append("puts ");
                 if (i.Args.Count == 1)
                 {
-                    EmitExpr(i.Args[0], sb);
+                    EmitExpr(i.Args[0], sb, ExprContext.Normal);
                 }
                 else if (i.Args.Count > 1)
                 {
@@ -157,9 +182,37 @@ public sealed class TclEmitter
                     foreach (var arg in i.Args)
                     {
                         sb.Append(" ");
-                        EmitExpr(arg, sb);
+                        EmitExpr(arg, sb, ExprContext.Normal);
                     }
                     sb.Append("]");
+                }
+                return;
+
+            case Intrinsic i when i.Name == "ternary":
+                // ternary(condition, true_expr, false_expr) => condition ? true_expr : false_expr
+                // In Tcl: expr {condition ? true_value : false_value}
+                sb.Append("[expr {");
+                if (i.Args.Count >= 3)
+                {
+                    EmitExpr(i.Args[0], sb, ExprContext.InsideExpr);  // condition
+                    sb.Append(" ? ");
+                    EmitExpr(i.Args[1], sb, ExprContext.InsideExpr);  // true_expr
+                    sb.Append(" : ");
+                    EmitExpr(i.Args[2], sb, ExprContext.InsideExpr);  // false_expr
+                }
+                sb.Append("}]");
+                return;
+
+            case Intrinsic i when i.Name == "raise":
+                // raise(exception) => error "exception"
+                sb.Append("error ");
+                if (i.Args.Count > 0)
+                {
+                    EmitExpr(i.Args[0], sb, ExprContext.Normal);
+                }
+                else
+                {
+                    sb.Append("\"\"");  // Re-raise with empty message
                 }
                 return;
 
@@ -168,8 +221,10 @@ public sealed class TclEmitter
                 return;
 
             case Variable v:
-                sb.Append("$");
-                sb.Append(v.Name);
+                if (context == ExprContext.InsideExpr)
+                    sb.Append(v.Name);  // No $ inside expr blocks
+                else
+                    sb.Append("$").Append(v.Name);  // Need $ outside expr blocks
                 return;
 
             case ListLiteral l:
@@ -177,7 +232,7 @@ public sealed class TclEmitter
                 for (int j = 0; j < l.Elements.Count; j++)
                 {
                     sb.Append(" ");
-                    EmitExpr(l.Elements[j], sb);
+                    EmitExpr(l.Elements[j], sb, ExprContext.Normal);
                 }
                 sb.Append("]");
                 return;
@@ -187,9 +242,9 @@ public sealed class TclEmitter
                 for (int j = 0; j < d.Items.Count; j++)
                 {
                     sb.Append(" ");
-                    EmitExpr(d.Items[j].Key, sb);
+                    EmitExpr(d.Items[j].Key, sb, ExprContext.Normal);
                     sb.Append(" ");
-                    EmitExpr(d.Items[j].Value, sb);
+                    EmitExpr(d.Items[j].Value, sb, ExprContext.Normal);
                 }
                 sb.Append("]");
                 return;
@@ -197,11 +252,11 @@ public sealed class TclEmitter
             case BinaryOp b:
                 // Tcl uses expr for math/logic
                 sb.Append("[expr {");
-                EmitExpr(b.Left, sb);
+                EmitExpr(b.Left, sb, ExprContext.InsideExpr);
                 sb.Append(" ");
                 sb.Append(b.Op);
                 sb.Append(" ");
-                EmitExpr(b.Right, sb);
+                EmitExpr(b.Right, sb, ExprContext.InsideExpr);
                 sb.Append("}]");
                 return;
 
@@ -209,7 +264,7 @@ public sealed class TclEmitter
                 sb.Append("[expr {");
                 sb.Append(u.Op);
                 sb.Append(" ");
-                EmitExpr(u.Operand, sb);
+                EmitExpr(u.Operand, sb, ExprContext.InsideExpr);
                 sb.Append("}]");
                 return;
 
@@ -221,7 +276,7 @@ public sealed class TclEmitter
                     for (int j = 0; j < f.Args.Count; j++)
                     {
                         sb.Append(" ");
-                        EmitExpr(f.Args[j], sb);
+                        EmitExpr(f.Args[j], sb, ExprContext.Normal);
                     }
                 }
                 else
@@ -230,7 +285,7 @@ public sealed class TclEmitter
                     for (int j = 0; j < f.Args.Count; j++)
                     {
                         sb.Append(" ");
-                        EmitExpr(f.Args[j], sb);
+                        EmitExpr(f.Args[j], sb, ExprContext.Normal);
                     }
                 }
                 return;
@@ -239,17 +294,26 @@ public sealed class TclEmitter
                 if (m.MethodName == "__slice__")
                 {
                     sb.Append("[string range ");
-                    EmitExpr(m.Target, sb);
+                    EmitExpr(m.Target, sb, ExprContext.Normal);
                     sb.Append(" ");
                     if (m.Args[0] is not Literal { Value: null })
-                        EmitExpr(m.Args[0], sb);
+                        EmitExpr(m.Args[0], sb, ExprContext.Normal);
                     else
                         sb.Append("0");
                     sb.Append(" ");
                     if (m.Args[1] is not Literal { Value: null })
-                        EmitExpr(m.Args[1], sb);
+                        EmitExpr(m.Args[1], sb, ExprContext.Normal);
                     else
                         sb.Append("end");
+                    sb.Append("]");
+                }
+                else if (m.MethodName == "__getitem__")
+                {
+                    // Array/string indexing: array[index] -> lindex $array $index or string index
+                    sb.Append("[lindex ");
+                    EmitExpr(m.Target, sb, ExprContext.Normal);
+                    sb.Append(" ");
+                    EmitExpr(m.Args[0], sb, ExprContext.Normal);
                     sb.Append("]");
                 }
                 else
@@ -258,11 +322,11 @@ public sealed class TclEmitter
                     sb.Append("::");
                     sb.Append(m.MethodName);
                     sb.Append(" ");
-                    EmitExpr(m.Target, sb);
+                    EmitExpr(m.Target, sb, ExprContext.Normal);
                     for (int j = 0; j < m.Args.Count; j++)
                     {
                         sb.Append(" ");
-                        EmitExpr(m.Args[j], sb);
+                        EmitExpr(m.Args[j], sb, ExprContext.Normal);
                     }
                 }
                 return;
@@ -285,19 +349,43 @@ public sealed class TclEmitter
                 sb.Append("[foreach ");
                 sb.Append(lc.LoopVar);
                 sb.Append(" ");
-                EmitExpr(lc.IterableExpr, sb);
+                EmitExpr(lc.IterableExpr, sb, ExprContext.Normal);
                 sb.Append(" {");
                 if (lc.FilterCondition != null)
                 {
                     sb.Append("if {");
-                    EmitExpr(lc.FilterCondition, sb);
+                    EmitExpr(lc.FilterCondition, sb, ExprContext.Normal);
                     sb.Append("} {");
                 }
                 sb.Append("lappend _result ");
-                EmitExpr(lc.Element, sb);
+                EmitExpr(lc.Element, sb, ExprContext.Normal);
                 if (lc.FilterCondition != null)
                     sb.Append("}");
                 sb.Append("}]");
+                return;
+
+            case DictComprehension dc:
+                // Tcl dict comprehension: dict create with foreach
+                sb.Append("[dict create ");
+                sb.Append("[foreach {");
+                // Handle tuple unpacking for loop vars like "k,v"
+                sb.Append(dc.LoopVar.Replace(",", " "));
+                sb.Append("} ");
+                EmitExpr(dc.IterableExpr, sb, ExprContext.Normal);
+                sb.Append(" {");
+                if (dc.FilterCondition != null)
+                {
+                    sb.Append("if {");
+                    EmitExpr(dc.FilterCondition, sb, ExprContext.Normal);
+                    sb.Append("} {");
+                }
+                sb.Append("dict set _result ");
+                EmitExpr(dc.KeyExpr, sb, ExprContext.Normal);
+                sb.Append(" ");
+                EmitExpr(dc.ValueExpr, sb, ExprContext.Normal);
+                if (dc.FilterCondition != null)
+                    sb.Append("}");
+                sb.Append("}]]");
                 return;
 
             case LambdaExpr lam:
@@ -307,7 +395,7 @@ public sealed class TclEmitter
                     sb.Append(" ").Append(param);
                 }
                 sb.Append(" {");
-                EmitExpr(lam.Body, sb);
+                EmitExpr(lam.Body, sb, ExprContext.Normal);
                 sb.Append("}");
                 return;
 

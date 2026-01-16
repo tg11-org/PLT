@@ -36,20 +36,33 @@ internal enum TokenType
     SEMICOLON,
     DOT,
     EQUALS,
+    PLUSEQ,
+    MINUSEQ,
+    STAREQ,
+    SLASHEQ,
     PLUS,
     MINUS,
     STAR,
     SLASH,
     PERCENT,
+    STARSTAR,      // **
+    SLASHSLASH,    // //
     EQEQ,
     NOTEQ,
     LT,
     GT,
     LTEQ,
     GTEQ,
+    LTLT,          // <<
+    GTGT,          // >>
+    AMPERSAND,     // &
+    PIPE,          // |
+    CARET,         // ^
+    TILDE,         // ~
     AND,
     OR,
     NOT,
+    AT,
     KEYWORD,
     COMMENT,
 }
@@ -223,7 +236,7 @@ internal class PythonLexer
         {
             "True" or "False" => TokenType.BOOL,
             "None" => TokenType.NONE,
-            "if" or "elif" or "else" or "for" or "while" or "def" or "return" or "import" or "from" or "as" or "class" or "try" or "except" or "finally" or "with" or "pass" or "break" or "continue" or "in" or "and" or "or" or "not" or "lambda" => TokenType.KEYWORD,
+            "if" or "elif" or "else" or "for" or "while" or "def" or "return" or "import" or "from" or "as" or "class" or "try" or "except" or "finally" or "with" or "pass" or "break" or "continue" or "in" or "and" or "or" or "not" or "lambda" or "raise" => TokenType.KEYWORD,
             _ => TokenType.IDENTIFIER
         };
 
@@ -241,6 +254,14 @@ internal class PythonLexer
                 "!=" => TokenType.NOTEQ,
                 "<=" => TokenType.LTEQ,
                 ">=" => TokenType.GTEQ,
+                "+=" => TokenType.PLUSEQ,
+                "-=" => TokenType.MINUSEQ,
+                "*=" => TokenType.STAREQ,
+                "/=" => TokenType.SLASHEQ,
+                "**" => TokenType.STARSTAR,
+                "//" => TokenType.SLASHSLASH,
+                "<<" => TokenType.LTLT,
+                ">>" => TokenType.GTGT,
                 "and" => TokenType.AND,
                 "or" => TokenType.OR,
                 _ => (TokenType?)null
@@ -277,6 +298,11 @@ internal class PythonLexer
             '<' => TokenType.LT,
             '>' => TokenType.GT,
             '!' => TokenType.NOT,
+            '@' => TokenType.AT,
+            '&' => TokenType.AMPERSAND,
+            '|' => TokenType.PIPE,
+            '^' => TokenType.CARET,
+            '~' => TokenType.TILDE,
             _ => (TokenType?)null
         };
 
@@ -332,7 +358,7 @@ internal class PythonParser
         SkipNewlines();
 
         // Skip decorators
-        if (Check(TokenType.IDENTIFIER) && Peek().Value == "@")
+        if (Check(TokenType.AT))
         {
             SkipDecorator();
             return ParseStatement(); // Parse the next statement (function/class)
@@ -346,6 +372,7 @@ internal class PythonParser
                 "import" => ParseImportStatement(),
                 "from" => ParseFromImportStatement(),
                 "return" => ParseReturnStatement(),
+                "raise" => ParseRaiseStatement(),
                 "class" => ParseClassDef(),
                 "try" => ParseTryStatement(),
                 "if" => ParseIfStatement(),
@@ -359,8 +386,9 @@ internal class PythonParser
         if (Check(TokenType.IDENTIFIER))
         {
             var next = PeekNext();
-            // Check if it's an assignment or member attribute assignment
-            if (next?.Type == TokenType.EQUALS)
+            // Check if it's an assignment or augmented assignment or member attribute assignment
+            if (next?.Type == TokenType.EQUALS || next?.Type == TokenType.PLUSEQ || 
+                next?.Type == TokenType.MINUSEQ || next?.Type == TokenType.STAREQ || next?.Type == TokenType.SLASHEQ)
             {
                 return ParseAssignment();
             }
@@ -372,7 +400,8 @@ internal class PythonParser
                 if (pos + 1 < _tokens.Count && _tokens[pos + 1].Type == TokenType.IDENTIFIER)
                 {
                     pos += 2; // position after the attribute name
-                    if (pos < _tokens.Count && _tokens[pos].Type == TokenType.EQUALS)
+                    if (pos < _tokens.Count && (_tokens[pos].Type == TokenType.EQUALS || _tokens[pos].Type == TokenType.PLUSEQ || 
+                        _tokens[pos].Type == TokenType.MINUSEQ || _tokens[pos].Type == TokenType.STAREQ || _tokens[pos].Type == TokenType.SLASHEQ))
                     {
                         return ParseAssignment(); // obj.attr = value
                     }
@@ -386,6 +415,12 @@ internal class PythonParser
                 return ParseAssignment();
             }
         }
+        
+        // Check for tuple unpacking: (var1, var2) = expression
+        if (Check(TokenType.LPAREN))
+        {
+            return ParseTupleUnpacking();
+        }
 
         return ParseExpressionStatement();
     }
@@ -393,6 +428,7 @@ internal class PythonParser
     private void SkipDecorator()
     {
         // Skip @ and decorator name/call
+        Consume(TokenType.AT, "Expected '@'");
         while (!Check(TokenType.NEWLINE) && !IsAtEnd())
             Advance();
         if (Match(TokenType.NEWLINE)) { }
@@ -434,6 +470,52 @@ internal class PythonParser
         return new ExprStmt(value); // Treat return as expression statement
     }
 
+    private Stmt ParseRaiseStatement()
+    {
+        Consume(TokenType.KEYWORD, "Expected 'raise'");
+        
+        // Check if there's an exception to raise
+        if (Check(TokenType.NEWLINE) || IsAtEnd())
+        {
+            SkipNewlines();
+            // Re-raise current exception
+            return new ExprStmt(new Intrinsic("raise", new List<Expr>()));
+        }
+
+        var exception = ParseExpression();
+        SkipNewlines();
+        // Treat raise as an intrinsic function call: raise(exception)
+        return new ExprStmt(new Intrinsic("raise", new List<Expr> { exception }));
+    }
+
+    private Stmt ParseTupleUnpacking()
+    {
+        // Parse pattern: (var1, var2, ...) = expression
+        Consume(TokenType.LPAREN, "Expected '('");
+        
+        var varNames = new List<string>();
+        
+        // Parse comma-separated variable names
+        do
+        {
+            var varName = Consume(TokenType.IDENTIFIER, "Expected variable name").Value;
+            varNames.Add(varName);
+            
+            // Skip trailing comma for single-element tuples: (x,) = ...
+            if (!Check(TokenType.COMMA))
+                break;
+            Advance(); // consume comma
+        } while (!Check(TokenType.RPAREN));
+        
+        Consume(TokenType.RPAREN, "Expected ')'");
+        Consume(TokenType.EQUALS, "Expected '='");
+        
+        var value = ParseExpression();
+        SkipNewlines();
+        
+        return new TupleUnpackingAssignment(varNames, value);
+    }
+
     private Stmt ParseExpressionStatement()
     {
         var expr = ParseExpression();
@@ -445,20 +527,72 @@ internal class PythonParser
     {
         var varName = Consume(TokenType.IDENTIFIER, "Expected variable name").Value;
         
-        // Check for member attribute access: obj.attr = value
+        // Check for member attribute access: obj.attr = value or obj.attr += value, etc
         if (Match(TokenType.DOT))
         {
             var attrName = Consume(TokenType.IDENTIFIER, "Expected attribute name").Value;
+            
+            // Handle augmented assignment for member attributes
+            if (Check(TokenType.PLUSEQ) || Check(TokenType.MINUSEQ) || Check(TokenType.STAREQ) || Check(TokenType.SLASHEQ))
+            {
+                var opToken = Advance();
+                var rhs = ParseExpression();
+                SkipNewlines();
+                
+                // obj.attr += value  =>  obj.attr = obj.attr + value
+                var op = opToken.Value switch
+                {
+                    "+=" => "+",
+                    "-=" => "-",
+                    "*=" => "*",
+                    "/=" => "/",
+                    _ => "+"
+                };
+                
+                var getAttr = new Intrinsic("getattr", new List<Expr> { 
+                    new Variable(varName), 
+                    new Literal(attrName) 
+                });
+                var binaryOp = new BinaryOp(getAttr, op, rhs);
+                return new ExprStmt(new Intrinsic("setattr", new List<Expr> { 
+                    new Variable(varName), 
+                    new Literal(attrName), 
+                    binaryOp
+                }));
+            }
+            
             Consume(TokenType.EQUALS, "Expected '='");
-            var value = ParseExpression();
+            var attrValue = ParseExpression();
             SkipNewlines();
             // Return as expression statement with a special method call pattern
-            // This represents: setattr(varName, attrName, value)
+            // This represents: setattr(varName, attrName, attrValue)
             return new ExprStmt(new Intrinsic("setattr", new List<Expr> { 
                 new Variable(varName), 
                 new Literal(attrName), 
-                value 
+                attrValue 
             }));
+        }
+        
+        // Check for augmented assignment: +=, -=, *=, /=
+        if (Check(TokenType.PLUSEQ) || Check(TokenType.MINUSEQ) || Check(TokenType.STAREQ) || Check(TokenType.SLASHEQ))
+        {
+            var opToken = Advance();
+            var assignValue = ParseExpression();
+            SkipNewlines();
+            
+            // Convert augmented assignment to regular assignment with binary operation
+            // x += y  =>  x = x + y
+            var op = opToken.Value switch
+            {
+                "+=" => "+",
+                "-=" => "-",
+                "*=" => "*",
+                "/=" => "/",
+                _ => "+"
+            };
+            
+            var binaryOp = new BinaryOp(new Variable(varName), op, assignValue);
+            return new VarAssignment(varName, binaryOp);
         }
         
         // Skip type annotation if present: var: type = value
@@ -468,9 +602,9 @@ internal class PythonParser
         }
         
         Consume(TokenType.EQUALS, "Expected '='");
-        var assignValue = ParseExpression();
+        var value = ParseExpression();
         SkipNewlines();
-        return new VarAssignment(varName, assignValue);
+        return new VarAssignment(varName, value);
     }
 
     private IfStmt ParseIfStatement()
@@ -482,9 +616,19 @@ internal class PythonParser
         // Check for single-line if statement (if condition: statement)
         if (!Check(TokenType.NEWLINE))
         {
-            // Parse single statement on same line
+            // Parse single or multiple semicolon-separated statements on same line
+            var thenBody = new List<Stmt>();
             var stmt = ParseStatement();
-            var thenBody = new List<Stmt> { stmt! };
+            if (stmt != null) thenBody.Add(stmt);
+            
+            // Handle semicolon-separated statements: if cond: stmt1; stmt2
+            while (Match(TokenType.SEMICOLON))
+            {
+                if (Check(TokenType.NEWLINE) || IsAtEnd()) break;
+                stmt = ParseStatement();
+                if (stmt != null) thenBody.Add(stmt);
+            }
+            
             return new IfStmt(condition, thenBody, null);
         }
         
@@ -677,9 +821,19 @@ internal class PythonParser
         // Check for single-line function definition (def foo(): statement)
         if (!Check(TokenType.NEWLINE))
         {
-            // Parse single statement on same line
+            // Parse single or multiple semicolon-separated statements on same line
+            var body = new List<Stmt>();
             var stmt = ParseStatement();
-            var body = new List<Stmt> { stmt! };
+            if (stmt != null) body.Add(stmt);
+            
+            // Handle semicolon-separated statements: def foo(): stmt1; stmt2; stmt3
+            while (Match(TokenType.SEMICOLON))
+            {
+                if (Check(TokenType.NEWLINE) || IsAtEnd()) break;
+                stmt = ParseStatement();
+                if (stmt != null) body.Add(stmt);
+            }
+            
             return new FunctionDefStmt(funcName, parameters, body);
         }
         
@@ -724,7 +878,7 @@ internal class PythonParser
         {
             if (Check(TokenType.LBRACKET)) { depth++; Advance(); }
             else if (Check(TokenType.RBRACKET)) { depth--; Advance(); if (depth <= 0) break; }
-            else if (depth == 0 && (Check(TokenType.COMMA) || Check(TokenType.RPAREN) || Check(TokenType.COLON) || Check(TokenType.EQUALS) || Check(TokenType.NEWLINE))) break;
+            else if (depth == 0 && (Check(TokenType.COMMA) || Check(TokenType.RPAREN) || Check(TokenType.COLON) || Check(TokenType.EQUALS) || Check(TokenType.PLUSEQ) || Check(TokenType.MINUSEQ) || Check(TokenType.STAREQ) || Check(TokenType.SLASHEQ) || Check(TokenType.NEWLINE))) break;
             else Advance();
         }
     }
@@ -751,7 +905,51 @@ internal class PythonParser
         {
             return ParseLambda();
         }
-        return ParseOrExpression();
+        
+        var expr = ParseTernary();
+        
+        // Check for tuple expression (comma-separated values)
+        // e.g., "a, b, c" or "return x, y, z"
+        if (Check(TokenType.COMMA))
+        {
+            var elements = new List<Expr> { expr };
+            while (Match(TokenType.COMMA))
+            {
+                // Don't parse comma as part of tuple if we hit newline, RPAREN, etc.
+                if (Check(TokenType.NEWLINE) || Check(TokenType.RPAREN) || 
+                    Check(TokenType.RBRACKET) || Check(TokenType.RBRACE) || IsAtEnd())
+                    break;
+                elements.Add(ParseTernary());
+            }
+            // Return as a list literal (tuple in Python is essentially immutable list)
+            return new ListLiteral(elements);
+        }
+        
+        return expr;
+    }
+
+    private Expr ParseTernary()
+    {
+        var expr = ParseOrExpression();
+        
+        // Check for ternary conditional: expr if condition else expr
+        if (Check(TokenType.KEYWORD) && Peek().Value == "if")
+        {
+            Advance(); // consume 'if'
+            var condition = ParseOrExpression();
+            
+            if (!Check(TokenType.KEYWORD) || Peek().Value != "else")
+                throw new Exception("Expected 'else' in ternary expression");
+            Advance(); // consume 'else'
+            
+            var falseExpr = ParseTernary(); // Right-associative
+            
+            // For now, represent ternary as a function call to a special intrinsic
+            // ternary(condition, true_value, false_value)
+            return new Intrinsic("ternary", new List<Expr> { condition, expr, falseExpr });
+        }
+        
+        return expr;
     }
 
     private Expr ParseLambda()
@@ -842,9 +1040,65 @@ internal class PythonParser
 
     private Expr ParseMultiplicativeExpression()
     {
+        var expr = ParseBitwiseOrExpression();
+
+        while (Match(TokenType.STAR, TokenType.SLASH, TokenType.PERCENT, TokenType.SLASHSLASH, TokenType.STARSTAR))
+        {
+            var op = Previous().Value;
+            var right = ParseBitwiseOrExpression();
+            expr = new BinaryOp(expr, op, right);
+        }
+
+        return expr;
+    }
+
+    private Expr ParseBitwiseOrExpression()
+    {
+        var expr = ParseBitwiseXorExpression();
+
+        while (Match(TokenType.PIPE))
+        {
+            var op = "|";
+            var right = ParseBitwiseXorExpression();
+            expr = new BinaryOp(expr, op, right);
+        }
+
+        return expr;
+    }
+
+    private Expr ParseBitwiseXorExpression()
+    {
+        var expr = ParseBitwiseAndExpression();
+
+        while (Match(TokenType.CARET))
+        {
+            var op = "^";
+            var right = ParseBitwiseAndExpression();
+            expr = new BinaryOp(expr, op, right);
+        }
+
+        return expr;
+    }
+
+    private Expr ParseBitwiseAndExpression()
+    {
+        var expr = ParseShiftExpression();
+
+        while (Match(TokenType.AMPERSAND))
+        {
+            var op = "&";
+            var right = ParseShiftExpression();
+            expr = new BinaryOp(expr, op, right);
+        }
+
+        return expr;
+    }
+
+    private Expr ParseShiftExpression()
+    {
         var expr = ParseUnaryExpression();
 
-        while (Match(TokenType.STAR, TokenType.SLASH, TokenType.PERCENT))
+        while (Match(TokenType.LTLT, TokenType.GTGT))
         {
             var op = Previous().Value;
             var right = ParseUnaryExpression();
@@ -856,11 +1110,24 @@ internal class PythonParser
 
     private Expr ParseUnaryExpression()
     {
-        if (Match(TokenType.NOT) || (Check(TokenType.KEYWORD) && Peek().Value == "not"))
+        if (Match(TokenType.TILDE))
         {
-            var op = "not";
             var expr = ParseUnaryExpression();
-            return new UnaryOp(op, expr);
+            return new UnaryOp("~", expr);
+        }
+
+        if (Match(TokenType.NOT))
+        {
+            var expr = ParseUnaryExpression();
+            return new UnaryOp("not", expr);
+        }
+        
+        // Handle 'not' as keyword
+        if (Check(TokenType.KEYWORD) && Peek().Value == "not")
+        {
+            Advance(); // consume the 'not' keyword
+            var expr = ParseUnaryExpression();
+            return new UnaryOp("not", expr);
         }
 
         if (Match(TokenType.MINUS))
@@ -994,7 +1261,7 @@ internal class PythonParser
                 return new ListLiteral(new List<Expr>());
             }
             
-            var firstExpr = ParseExpression();
+            var firstExpr = ParseTernary();  // Use ParseTernary to avoid tuple parsing
             
             // Check for list comprehension
             if (Check(TokenType.KEYWORD) && Peek().Value == "for")
@@ -1029,7 +1296,7 @@ internal class PythonParser
                 SkipNewlinesAndIndentation();
                 if (Check(TokenType.RBRACKET))
                     break;
-                elements.Add(ParseExpression());
+                elements.Add(ParseTernary());  // Use ParseTernary to avoid tuple parsing
             }
             SkipNewlinesAndIndentation();
             Consume(TokenType.RBRACKET, "Expected ']'");
@@ -1038,21 +1305,78 @@ internal class PythonParser
 
         if (Match(TokenType.LBRACE))
         {
-            var items = new List<(Expr, Expr)>();
             SkipNewlinesAndIndentation();
-            if (!Check(TokenType.RBRACE))
+            
+            // Empty dict
+            if (Check(TokenType.RBRACE))
             {
-                do
+                Consume(TokenType.RBRACE, "Expected '}'");
+                return new DictLiteral(new List<(Expr, Expr)>());
+            }
+            
+            // Parse first key
+            var firstKey = ParseTernary();
+            SkipNewlinesAndIndentation();
+            Consume(TokenType.COLON, "Expected ':' in dictionary");
+            SkipNewlinesAndIndentation();
+            var firstValue = ParseTernary();
+            SkipNewlinesAndIndentation();
+            
+            // Check for dictionary comprehension: {k:v for k,v in ...}
+            if (Check(TokenType.KEYWORD) && Peek().Value == "for")
+            {
+                Advance(); // consume 'for'
+                
+                // Parse loop variable(s) - could be single or tuple unpacking like "k,v"
+                var loopVars = new List<string>();
+                if (!Check(TokenType.IDENTIFIER))
+                    throw new Exception("Expected variable name after 'for' in dict comprehension");
+                loopVars.Add(Advance().Value);
+                
+                // Check for tuple unpacking: for k,v in ...
+                while (Match(TokenType.COMMA))
                 {
-                    SkipNewlinesAndIndentation();
-                    var key = ParseExpression();
-                    SkipNewlinesAndIndentation();
-                    Consume(TokenType.COLON, "Expected ':' in dictionary literal");
-                    SkipNewlinesAndIndentation();
-                    var value = ParseExpression();
-                    SkipNewlinesAndIndentation();
-                    items.Add((key, value));
-                } while (Match(TokenType.COMMA));
+                    if (!Check(TokenType.IDENTIFIER))
+                        throw new Exception("Expected variable name after ',' in dict comprehension");
+                    loopVars.Add(Advance().Value);
+                }
+                
+                if (!Check(TokenType.KEYWORD) || Peek().Value != "in")
+                    throw new Exception("Expected 'in' after variable in dict comprehension");
+                Advance(); // consume 'in'
+                
+                var iterableExpr = ParseOrExpression();
+                
+                // Check for optional filter condition
+                Expr? filterCondition = null;
+                if (Check(TokenType.KEYWORD) && Peek().Value == "if")
+                {
+                    Advance(); // consume 'if'
+                    filterCondition = ParseOrExpression();
+                }
+                
+                SkipNewlinesAndIndentation();
+                Consume(TokenType.RBRACE, "Expected '}'");
+                
+                // Use comma-joined loop vars as the loop variable name
+                var loopVar = string.Join(",", loopVars);
+                return new DictComprehension(firstKey, firstValue, loopVar, iterableExpr, filterCondition);
+            }
+            
+            // Regular dictionary literal
+            var items = new List<(Expr, Expr)> { (firstKey, firstValue) };
+            while (Match(TokenType.COMMA))
+            {
+                SkipNewlinesAndIndentation();
+                if (Check(TokenType.RBRACE))
+                    break;
+                var key = ParseTernary();
+                SkipNewlinesAndIndentation();
+                Consume(TokenType.COLON, "Expected ':' in dictionary literal");
+                SkipNewlinesAndIndentation();
+                var value = ParseTernary();
+                SkipNewlinesAndIndentation();
+                items.Add((key, value));
             }
             SkipNewlinesAndIndentation();
             Consume(TokenType.RBRACE, "Expected '}'");
@@ -1069,7 +1393,7 @@ internal class PythonParser
         {
             do
             {
-                args.Add(ParseExpression());
+                args.Add(ParseTernary());  // Use ParseTernary to avoid tuple parsing
             } while (Match(TokenType.COMMA));
         }
         return args;

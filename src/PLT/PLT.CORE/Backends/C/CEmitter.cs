@@ -46,6 +46,21 @@ public sealed class CEmitter
                 sb.AppendLine(";");
                 break;
 
+            case TupleUnpackingAssignment t:
+                if (!string.IsNullOrWhiteSpace(t.LeadingComment))
+                    sb.AppendLine($"{pad}// {t.LeadingComment}");
+                sb.Append(pad);
+                sb.Append("// Tuple unpacking not supported in C: (");
+                for (int i = 0; i < t.VarNames.Count; i++)
+                {
+                    if (i > 0) sb.Append(", ");
+                    sb.Append(t.VarNames[i]);
+                }
+                sb.Append(") = ");
+                EmitExpr(t.Value, sb);
+                sb.AppendLine();
+                break;
+
             case IfStmt i:
                 if (!string.IsNullOrWhiteSpace(i.LeadingComment))
                     sb.AppendLine($"{pad}// {i.LeadingComment}");
@@ -160,6 +175,28 @@ public sealed class CEmitter
                 sb.Append(")");
                 return;
 
+            case Intrinsic i when i.Name == "ternary":
+                // ternary(condition, true_expr, false_expr) => condition ? true_expr : false_expr
+                if (i.Args.Count >= 3)
+                {
+                    EmitExpr(i.Args[0], sb);  // condition
+                    sb.Append(" ? ");
+                    EmitExpr(i.Args[1], sb);  // true_expr
+                    sb.Append(" : ");
+                    EmitExpr(i.Args[2], sb);  // false_expr
+                }
+                return;
+
+            case Intrinsic i when i.Name == "raise":
+                // C doesn't have exceptions, emit as comment
+                sb.Append("/* raise ");
+                if (i.Args.Count > 0)
+                {
+                    EmitExpr(i.Args[0], sb);
+                }
+                sb.Append(" */");
+                return;
+
             case Literal l:
                 sb.Append(FormatCLiteral(l.Value));
                 return;
@@ -233,6 +270,14 @@ public sealed class CEmitter
                     }
                     sb.Append("] */");
                 }
+                else if (m.MethodName == "__getitem__")
+                {
+                    // Array indexing in C
+                    EmitExpr(m.Target, sb);
+                    sb.Append("[");
+                    EmitExpr(m.Args[0], sb);
+                    sb.Append("]");
+                }
                 else
                 {
                     // C doesn't have methods, just function calls
@@ -274,6 +319,24 @@ public sealed class CEmitter
                     EmitExpr(lc.FilterCondition, sb);
                 }
                 sb.Append("] */");
+                return;
+
+            case DictComprehension dc:
+                // C doesn't have native dict comprehensions, emit as comment
+                sb.Append("/* dict comprehension: {");
+                EmitExpr(dc.KeyExpr, sb);
+                sb.Append(": ");
+                EmitExpr(dc.ValueExpr, sb);
+                sb.Append(" for ");
+                sb.Append(dc.LoopVar);
+                sb.Append(" in ");
+                EmitExpr(dc.IterableExpr, sb);
+                if (dc.FilterCondition != null)
+                {
+                    sb.Append(" if ");
+                    EmitExpr(dc.FilterCondition, sb);
+                }
+                sb.Append("} */");
                 return;
 
             case LambdaExpr lam:
