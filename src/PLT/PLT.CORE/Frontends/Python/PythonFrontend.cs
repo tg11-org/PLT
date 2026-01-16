@@ -77,6 +77,7 @@ internal class PythonLexer
     private int _col = 1;
     private readonly List<Token> _tokens = new();
     private int _indentLevel = 0;
+    private int _bracketDepth = 0;  // Track nested brackets/parens/braces
 
     public PythonLexer(string source)
     {
@@ -153,6 +154,10 @@ internal class PythonLexer
 
     private void HandleIndentation()
     {
+        // Don't generate INDENT/DEDENT tokens when inside brackets/parens/braces
+        if (_bracketDepth > 0)
+            return;
+
         int spaces = 0;
         while (_position < _source.Length && _source[_position] == ' ')
         {
@@ -174,7 +179,7 @@ internal class PythonLexer
         _col = spaces + 1;
     }
 
-    private void ReadString()
+    private void ReadString(string? prefix = null)
     {
         var quote = _source[_position];
         _position++;
@@ -206,18 +211,93 @@ internal class PythonLexer
         }
 
         if (_position < _source.Length) _position++; // closing quote
+        // For prefixed strings like b"...", the token value just includes the string content
         _tokens.Add(new Token(TokenType.STRING, sb.ToString(), _line, _col));
     }
 
     private void ReadNumber()
     {
         var sb = new System.Text.StringBuilder();
+        
+        // Check for hex (0x), octal (0o), or binary (0b) literals
+        if (_position < _source.Length && _source[_position] == '0' && _position + 1 < _source.Length)
+        {
+            char next = _source[_position + 1];
+            if (next == 'x' || next == 'X')  // Hex
+            {
+                sb.Append(_source[_position++]);
+                sb.Append(_source[_position++]);
+                _col += 2;
+                while (_position < _source.Length && (char.IsDigit(_source[_position]) || 
+                       ('a' <= _source[_position] && _source[_position] <= 'f') ||
+                       ('A' <= _source[_position] && _source[_position] <= 'F')))
+                {
+                    sb.Append(_source[_position++]);
+                    _col++;
+                }
+                _tokens.Add(new Token(TokenType.NUMBER, sb.ToString(), _line, _col));
+                return;
+            }
+            else if (next == 'o' || next == 'O')  // Octal
+            {
+                sb.Append(_source[_position++]);
+                sb.Append(_source[_position++]);
+                _col += 2;
+                while (_position < _source.Length && _source[_position] >= '0' && _source[_position] <= '7')
+                {
+                    sb.Append(_source[_position++]);
+                    _col++;
+                }
+                _tokens.Add(new Token(TokenType.NUMBER, sb.ToString(), _line, _col));
+                return;
+            }
+            else if (next == 'b' || next == 'B')  // Binary
+            {
+                sb.Append(_source[_position++]);
+                sb.Append(_source[_position++]);
+                _col += 2;
+                while (_position < _source.Length && (_source[_position] == '0' || _source[_position] == '1'))
+                {
+                    sb.Append(_source[_position++]);
+                    _col++;
+                }
+                _tokens.Add(new Token(TokenType.NUMBER, sb.ToString(), _line, _col));
+                return;
+            }
+        }
+        
+        // Regular decimal number (including scientific notation)
         while (_position < _source.Length && (char.IsDigit(_source[_position]) || _source[_position] == '.'))
         {
             sb.Append(_source[_position]);
             _position++;
             _col++;
         }
+        
+        // Handle scientific notation (e or E)
+        if (_position < _source.Length && (_source[_position] == 'e' || _source[_position] == 'E'))
+        {
+            sb.Append(_source[_position]);
+            _position++;
+            _col++;
+            
+            // Optional + or - sign
+            if (_position < _source.Length && (_source[_position] == '+' || _source[_position] == '-'))
+            {
+                sb.Append(_source[_position]);
+                _position++;
+                _col++;
+            }
+            
+            // Exponent digits
+            while (_position < _source.Length && char.IsDigit(_source[_position]))
+            {
+                sb.Append(_source[_position]);
+                _position++;
+                _col++;
+            }
+        }
+        
         _tokens.Add(new Token(TokenType.NUMBER, sb.ToString(), _line, _col));
     }
 
@@ -232,11 +312,23 @@ internal class PythonLexer
         }
 
         var text = sb.ToString();
+        
+        // Check if this is a string prefix (b, r, f, br, rb, fr, rf, etc.)
+        if ((text == "b" || text == "r" || text == "f" || text == "br" || text == "rb" || 
+             text == "fr" || text == "rf" || text == "B" || text == "R" || text == "F" || 
+             text == "BR" || text == "RB" || text == "FR" || text == "RF") &&
+            _position < _source.Length && (_source[_position] == '"' || _source[_position] == '\''))
+        {
+            // This is a string with a prefix - read the string and return it with the prefix
+            ReadString(text);
+            return;
+        }
+        
         var type = text switch
         {
             "True" or "False" => TokenType.BOOL,
             "None" => TokenType.NONE,
-            "if" or "elif" or "else" or "for" or "while" or "def" or "return" or "import" or "from" or "as" or "class" or "try" or "except" or "finally" or "with" or "pass" or "break" or "continue" or "in" or "and" or "or" or "not" or "lambda" or "raise" => TokenType.KEYWORD,
+            "if" or "elif" or "else" or "for" or "while" or "def" or "return" or "import" or "from" or "as" or "class" or "try" or "except" or "finally" or "with" or "pass" or "break" or "continue" or "in" or "and" or "or" or "not" or "lambda" or "raise" or "is" or "yield" => TokenType.KEYWORD,
             _ => TokenType.IDENTIFIER
         };
 
@@ -309,6 +401,13 @@ internal class PythonLexer
         if (singleType.HasValue)
         {
             _tokens.Add(new Token(singleType.Value, oneChar.ToString(), _line, _col));
+            
+            // Track bracket depth for INDENT/DEDENT suppression
+            if (oneChar == '(' || oneChar == '[' || oneChar == '{')
+                _bracketDepth++;
+            else if (oneChar == ')' || oneChar == ']' || oneChar == '}')
+                _bracketDepth--;
+            
             _position++;
             _col++;
             return true;
@@ -372,10 +471,14 @@ internal class PythonParser
                 "import" => ParseImportStatement(),
                 "from" => ParseFromImportStatement(),
                 "return" => ParseReturnStatement(),
+                "yield" => ParseYieldStatement(),
                 "raise" => ParseRaiseStatement(),
                 "pass" => ParsePassStatement(),
+                "break" => ParseBreakStatement(),
+                "continue" => ParseContinueStatement(),
                 "class" => ParseClassDef(),
                 "try" => ParseTryStatement(),
+                "with" => ParseWithStatement(),
                 "if" => ParseIfStatement(),
                 "for" => ParseForStatement(),
                 "while" => ParseWhileStatement(),
@@ -393,6 +496,11 @@ internal class PythonParser
             {
                 return ParseAssignment();
             }
+            // Check for tuple unpacking without parentheses: var, = expression
+            else if (next?.Type == TokenType.COMMA)
+            {
+                return ParseTupleUnpackingWithoutParens();
+            }
             // For member access (obj.attr), check if it's an assignment or expression
             else if (next?.Type == TokenType.DOT)
             {
@@ -408,6 +516,28 @@ internal class PythonParser
                     }
                 }
                 // Otherwise it's an expression (method call or property access)
+                return ParseExpressionStatement();
+            }
+            // For index access (obj[idx]), check if it's an assignment or expression
+            else if (next?.Type == TokenType.LBRACKET)
+            {
+                // Look ahead for assignment after the bracket
+                var pos = _current + 1; // position of LBRACKET
+                var bracketDepth = 0;
+                while (pos < _tokens.Count)
+                {
+                    if (_tokens[pos].Type == TokenType.LBRACKET) bracketDepth++;
+                    else if (_tokens[pos].Type == TokenType.RBRACKET) bracketDepth--;
+                    pos++;
+                    if (bracketDepth == 0) break;  // Found matching RBRACKET
+                }
+                // Now pos is after the RBRACKET
+                if (pos < _tokens.Count && (_tokens[pos].Type == TokenType.EQUALS || _tokens[pos].Type == TokenType.PLUSEQ || 
+                    _tokens[pos].Type == TokenType.MINUSEQ || _tokens[pos].Type == TokenType.STAREQ || _tokens[pos].Type == TokenType.SLASHEQ))
+                {
+                    return ParseAssignment(); // obj[idx] = value
+                }
+                // Otherwise it's an expression (index access)
                 return ParseExpressionStatement();
             }
             // Type annotation: var: type = value
@@ -471,6 +601,22 @@ internal class PythonParser
         return new ExprStmt(value); // Treat return as expression statement
     }
 
+    private Stmt ParseYieldStatement()
+    {
+        Consume(TokenType.KEYWORD, "Expected 'yield'");
+        
+        // Check if there's a value to yield
+        if (Check(TokenType.NEWLINE) || IsAtEnd())
+        {
+            SkipNewlines();
+            return new ExprStmt(new Literal(null)); // Yield None
+        }
+
+        var value = ParseExpression();
+        SkipNewlines();
+        return new ExprStmt(value); // Treat yield as expression statement
+    }
+
     private Stmt ParseRaiseStatement()
     {
         Consume(TokenType.KEYWORD, "Expected 'raise'");
@@ -491,6 +637,20 @@ internal class PythonParser
     {
         Consume(TokenType.KEYWORD, "Expected 'pass'");
         return new PassStmt();
+    }
+
+    private Stmt ParseBreakStatement()
+    {
+        Consume(TokenType.KEYWORD, "Expected 'break'");
+        SkipNewlines();
+        return new PassStmt(); // Treat as pass for now
+    }
+
+    private Stmt ParseContinueStatement()
+    {
+        Consume(TokenType.KEYWORD, "Expected 'continue'");
+        SkipNewlines();
+        return new PassStmt(); // Treat as pass for now
     }
 
     private Stmt ParseTupleUnpacking()
@@ -526,9 +686,71 @@ internal class PythonParser
         return new ExprStmt(expr);
     }
 
+    private Stmt ParseTupleUnpackingWithoutParens()
+    {
+        // Parse pattern: var1, var2, ... = expression
+        var varNames = new List<string>();
+        
+        // Parse comma-separated variable names
+        do
+        {
+            var varName = Consume(TokenType.IDENTIFIER, "Expected variable name").Value;
+            varNames.Add(varName);
+            
+            // Skip trailing comma for single-element tuples: x, = ...
+            if (!Check(TokenType.COMMA))
+                break;
+            Advance(); // consume comma
+        } while (!Check(TokenType.EQUALS));
+        
+        Consume(TokenType.EQUALS, "Expected '='");
+        
+        var value = ParseExpression();
+        
+        return new TupleUnpackingAssignment(varNames, value);
+    }
+
     private Stmt ParseAssignment()
     {
         var varName = Consume(TokenType.IDENTIFIER, "Expected variable name").Value;
+        
+        // Check for subscript access: obj[idx] = value or obj[idx] += value, etc
+        if (Match(TokenType.LBRACKET))
+        {
+            var index = ParseExpression();
+            Consume(TokenType.RBRACKET, "Expected ']'");
+            
+            // Handle augmented assignment for subscripts
+            if (Check(TokenType.PLUSEQ) || Check(TokenType.MINUSEQ) || Check(TokenType.STAREQ) || Check(TokenType.SLASHEQ))
+            {
+                var opToken = Advance();
+                var rhs = ParseExpression();
+                SkipNewlines();
+                
+                // obj[idx] += value  =>  obj[idx] = obj[idx] + value
+                var op = opToken.Value switch
+                {
+                    "+=" => "+",
+                    "-=" => "-",
+                    "*=" => "*",
+                    "/=" => "/",
+                    _ => "+"
+                };
+                
+                var getItem = new MethodCall(new Variable(varName), "__getitem__", new List<Expr> { index });
+                var binaryOp = new BinaryOp(getItem, op, rhs);
+                return new ExprStmt(new MethodCall(new Variable(varName), "__setitem__", new List<Expr> { index, binaryOp }));
+            }
+            
+            Consume(TokenType.EQUALS, "Expected '='");
+            var subscriptValue = ParseExpression();
+            SkipNewlines();
+            // Return as expression statement with a __setitem__ call
+            return new ExprStmt(new MethodCall(new Variable(varName), "__setitem__", new List<Expr> { 
+                index, 
+                subscriptValue 
+            }));
+        }
         
         // Check for member attribute access: obj.attr = value or obj.attr += value, etc
         if (Match(TokenType.DOT))
@@ -602,6 +824,14 @@ internal class PythonParser
         if (Match(TokenType.COLON))
         {
             SkipTypeAnnotation();
+            
+            // Type-only annotation without assignment (e.g., in dataclasses)
+            if (!Check(TokenType.EQUALS))
+            {
+                // No assignment, just type annotation
+                SkipNewlines();
+                return null;
+            }
         }
         
         Consume(TokenType.EQUALS, "Expected '='");
@@ -632,7 +862,29 @@ internal class PythonParser
                 if (stmt != null) thenBody.Add(stmt);
             }
             
-            return new IfStmt(condition, thenBody, null);
+            // Check for single-line else clause: if cond: stmt else: stmt
+            IReadOnlyList<Stmt>? elseBody = null;
+            SkipNewlines();
+            if (Check(TokenType.KEYWORD) && Peek().Value == "else")
+            {
+                Advance();  // consume 'else'
+                Consume(TokenType.COLON, "Expected ':'");
+                if (!Check(TokenType.NEWLINE))
+                {
+                    elseBody = new List<Stmt>();
+                    stmt = ParseStatement();
+                    if (stmt != null) ((List<Stmt>)elseBody).Add(stmt);
+                    
+                    while (Match(TokenType.SEMICOLON))
+                    {
+                        if (Check(TokenType.NEWLINE) || IsAtEnd()) break;
+                        stmt = ParseStatement();
+                        if (stmt != null) ((List<Stmt>)elseBody).Add(stmt);
+                    }
+                }
+            }
+            
+            return new IfStmt(condition, thenBody, elseBody);
         }
         
         // Multi-line if statement
@@ -640,27 +892,84 @@ internal class PythonParser
         Consume(TokenType.INDENT, "Expected indented block");
 
         var thenBodyList = ParseIndentedBlock();
-        IReadOnlyList<Stmt>? elseBody = null;
+        IReadOnlyList<Stmt>? elseBodyMulti = null;
 
+        // Consume the DEDENT that marks end of if body
         if (Check(TokenType.DEDENT)) Advance();
         SkipNewlines();
 
-        if (Match(TokenType.KEYWORD) && Previous().Value == "else")
+        if (Check(TokenType.KEYWORD) && (Peek().Value == "elif" || Peek().Value == "else"))
         {
-            Consume(TokenType.COLON, "Expected ':'");
-            SkipNewlines();
-            Consume(TokenType.INDENT, "Expected indented block");
-            elseBody = ParseIndentedBlock();
-            if (Check(TokenType.DEDENT)) Advance();
+            if (Peek().Value == "elif")
+            {
+                // Consume DEDENT before elif
+                if (Check(TokenType.DEDENT)) Advance();
+                SkipNewlines();
+                
+                // Parse elif as a nested if statement
+                elseBodyMulti = new List<Stmt> { ParseIfStatement() };
+            }
+            else  // else
+            {
+                // Consume the DEDENT before else
+                if (Check(TokenType.DEDENT)) Advance();
+                SkipNewlines();
+                
+                Consume(TokenType.KEYWORD, "Expected 'else'");
+                Consume(TokenType.COLON, "Expected ':'");
+                SkipNewlines();
+                Consume(TokenType.INDENT, "Expected indented block");
+                elseBodyMulti = ParseIndentedBlock();
+                if (Check(TokenType.DEDENT)) Advance();
+            }
         }
 
-        return new IfStmt(condition, thenBodyList, elseBody);
+        return new IfStmt(condition, thenBodyList, elseBodyMulti);
     }
 
     private ForEachStmt ParseForStatement()
     {
         Consume(TokenType.KEYWORD, "Expected 'for'");
-        var loopVar = Consume(TokenType.IDENTIFIER, "Expected loop variable").Value;
+        
+        // Parse loop variable - can be identifier, tuple unpacking with/without parentheses
+        string loopVar;
+        if (Match(TokenType.LPAREN))
+        {
+            // Tuple unpacking: for (x, y, z) in ...
+            var vars = new List<string>();
+            do
+            {
+                vars.Add(Consume(TokenType.IDENTIFIER, "Expected identifier in tuple unpack").Value);
+            } while (Match(TokenType.COMMA) && !Check(TokenType.RPAREN));
+            Consume(TokenType.RPAREN, "Expected ')' after tuple unpack");
+            loopVar = "(" + string.Join(", ", vars) + ")";
+        }
+        else if (Check(TokenType.IDENTIFIER))
+        {
+            // Could be simple identifier or tuple unpacking without parentheses
+            var firstVar = Advance().Value;
+            
+            // Check for comma (tuple unpacking without parentheses)
+            if (Match(TokenType.COMMA))
+            {
+                var vars = new List<string> { firstVar };
+                do
+                {
+                    if (Check(TokenType.IDENTIFIER))
+                        vars.Add(Advance().Value);
+                } while (Match(TokenType.COMMA) && Check(TokenType.IDENTIFIER));
+                loopVar = string.Join(", ", vars);
+            }
+            else
+            {
+                loopVar = firstVar;
+            }
+        }
+        else
+        {
+            throw new Exception("Expected loop variable");
+        }
+        
         if (!Check(TokenType.KEYWORD) || Peek().Value != "in")
             throw new Exception("Expected 'in' after loop variable");
         Advance();  // consume 'in'
@@ -689,15 +998,57 @@ internal class PythonParser
         return new WhileStmt(condition, body);
     }
 
+    private Stmt ParseWithStatement()
+    {
+        Consume(TokenType.KEYWORD, "Expected 'with'");
+        
+        // Parse: with expr as var:
+        var contextExpr = ParseExpression();
+        string? varName = null;
+        
+        if (Check(TokenType.KEYWORD) && Peek().Value == "as")
+        {
+            Advance(); // consume 'as'
+            varName = Consume(TokenType.IDENTIFIER, "Expected variable name").Value;
+        }
+        
+        Consume(TokenType.COLON, "Expected ':'");
+        SkipNewlines();
+        Consume(TokenType.INDENT, "Expected indented block");
+        
+        var body = ParseIndentedBlock();
+        if (Check(TokenType.DEDENT)) Advance();
+        
+        // Treat with statement as a simple block for now
+        // In a more complete implementation, we'd have a WithStmt node
+        return new ExprStmt(contextExpr); // Simplified representation
+    }
+
     private TryStmt ParseTryStatement()
     {
         Consume(TokenType.KEYWORD, "Expected 'try'");
         Consume(TokenType.COLON, "Expected ':'");
-        SkipNewlines();
-        Consume(TokenType.INDENT, "Expected indented block");
-        var tryBody = ParseIndentedBlock();
-        if (Check(TokenType.DEDENT)) Advance();
+        
+        // Check for single-line try: try: statement
+        IReadOnlyList<Stmt> tryBody;
+        if (!Check(TokenType.NEWLINE))
+        {
+            // Single-line try
+            var stmts = new List<Stmt>();
+            var stmt = ParseStatement();
+            if (stmt != null) stmts.Add(stmt);
+            tryBody = stmts;
+        }
+        else
+        {
+            // Multi-line try
+            SkipNewlines();
+            Consume(TokenType.INDENT, "Expected indented block");
+            tryBody = ParseIndentedBlock();
+            if (Check(TokenType.DEDENT)) Advance();
+        }
 
+        SkipNewlines();  // Skip newlines before checking for except
         var exceptClauses = new List<(string? ExceptionType, string? VarName, IReadOnlyList<Stmt> Body)>();
         
         while (Check(TokenType.KEYWORD) && Peek().Value == "except")
@@ -721,10 +1072,25 @@ internal class PythonParser
             }
             
             Consume(TokenType.COLON, "Expected ':'");
-            SkipNewlines();
-            Consume(TokenType.INDENT, "Expected indented block");
-            var exceptBody = ParseIndentedBlock();
-            if (Check(TokenType.DEDENT)) Advance();
+            
+            // Check for single-line except: except Exception: pass
+            IReadOnlyList<Stmt> exceptBody;
+            if (!Check(TokenType.NEWLINE))
+            {
+                // Single-line except
+                var stmts = new List<Stmt>();
+                var stmt = ParseStatement();
+                if (stmt != null) stmts.Add(stmt);
+                exceptBody = stmts;
+            }
+            else
+            {
+                // Multi-line except
+                SkipNewlines();
+                Consume(TokenType.INDENT, "Expected indented block");
+                exceptBody = ParseIndentedBlock();
+                if (Check(TokenType.DEDENT)) Advance();
+            }
             
             exceptClauses.Add((exceptionType, varName, exceptBody));
         }
@@ -1017,11 +1383,57 @@ internal class PythonParser
     {
         var expr = ParseAdditiveExpression();
 
-        while (Match(TokenType.EQEQ, TokenType.NOTEQ, TokenType.LT, TokenType.GT, TokenType.LTEQ, TokenType.GTEQ))
+        while (true)
         {
-            var op = Previous().Value;
-            var right = ParseAdditiveExpression();
-            expr = new BinaryOp(expr, op, right);
+            if (Match(TokenType.EQEQ, TokenType.NOTEQ, TokenType.LT, TokenType.GT, TokenType.LTEQ, TokenType.GTEQ))
+            {
+                var op = Previous().Value;
+                var right = ParseAdditiveExpression();
+                expr = new BinaryOp(expr, op, right);
+            }
+            else if (Check(TokenType.KEYWORD) && Peek().Value == "is")
+            {
+                Advance();  // consume 'is'
+                // Check for "is not"
+                var op = "is";
+                if (Check(TokenType.KEYWORD) && Peek().Value == "not")
+                {
+                    Advance();  // consume 'not'
+                    op = "is not";
+                }
+                var right = ParseAdditiveExpression();
+                expr = new BinaryOp(expr, op, right);
+            }
+            else if (Check(TokenType.KEYWORD) && Peek().Value == "in")
+            {
+                Advance();  // consume 'in'
+                var op = "in";
+                var right = ParseAdditiveExpression();
+                expr = new BinaryOp(expr, op, right);
+            }
+            else if (Check(TokenType.KEYWORD) && Peek().Value == "not")
+            {
+                // Check for "not in"
+                var pos = _current;
+                Advance();  // consume 'not'
+                if (Check(TokenType.KEYWORD) && Peek().Value == "in")
+                {
+                    Advance();  // consume 'in'
+                    var op = "not in";
+                    var right = ParseAdditiveExpression();
+                    expr = new BinaryOp(expr, op, right);
+                }
+                else
+                {
+                    // Not "not in", restore position
+                    _current = pos;
+                    break;
+                }
+            }
+            else
+            {
+                break;
+            }
         }
 
         return expr;
@@ -1061,6 +1473,7 @@ internal class PythonParser
 
         while (Match(TokenType.PIPE))
         {
+            SkipNewlines();  // Handle multi-line expressions
             var op = "|";
             var right = ParseBitwiseXorExpression();
             expr = new BinaryOp(expr, op, right);
@@ -1075,6 +1488,7 @@ internal class PythonParser
 
         while (Match(TokenType.CARET))
         {
+            SkipNewlines();  // Handle multi-line expressions
             var op = "^";
             var right = ParseBitwiseAndExpression();
             expr = new BinaryOp(expr, op, right);
@@ -1089,6 +1503,7 @@ internal class PythonParser
 
         while (Match(TokenType.AMPERSAND))
         {
+            SkipNewlines();  // Handle multi-line expressions
             var op = "&";
             var right = ParseShiftExpression();
             expr = new BinaryOp(expr, op, right);
@@ -1224,7 +1639,44 @@ internal class PythonParser
         if (Match(TokenType.NUMBER))
         {
             var value = Previous().Value;
-            return new Literal(double.TryParse(value, out var d) ? d : int.Parse(value));
+            
+            // Parse different number formats
+            object parsedValue = 0;
+            
+            try
+            {
+                if (value.StartsWith("0x") || value.StartsWith("0X"))
+                {
+                    // Hexadecimal
+                    parsedValue = Convert.ToInt64(value, 16);
+                }
+                else if (value.StartsWith("0o") || value.StartsWith("0O"))
+                {
+                    // Octal
+                    parsedValue = Convert.ToInt64(value, 8);
+                }
+                else if (value.StartsWith("0b") || value.StartsWith("0B"))
+                {
+                    // Binary
+                    parsedValue = Convert.ToInt64(value, 2);
+                }
+                else if (double.TryParse(value, out var d))
+                {
+                    // Float or regular integer
+                    parsedValue = d;
+                }
+                else if (int.TryParse(value, out var i))
+                {
+                    parsedValue = i;
+                }
+            }
+            catch
+            {
+                // If all parsing fails, treat as string
+                parsedValue = value;
+            }
+            
+            return new Literal(parsedValue);
         }
 
         if (Match(TokenType.STRING))
@@ -1258,6 +1710,7 @@ internal class PythonParser
 
         if (Match(TokenType.LBRACKET))
         {
+            SkipNewlines();
             if (Check(TokenType.RBRACKET))
             {
                 Consume(TokenType.RBRACKET, "Expected ']'");
@@ -1288,6 +1741,7 @@ internal class PythonParser
                     filterCondition = ParseOrExpression();
                 }
                 
+                SkipNewlines();
                 Consume(TokenType.RBRACKET, "Expected ']'");
                 return new ListComprehension(firstExpr, loopVar, iterableExpr, filterCondition);
             }
@@ -1296,19 +1750,28 @@ internal class PythonParser
             var elements = new List<Expr> { firstExpr };
             while (Match(TokenType.COMMA))
             {
-                SkipNewlinesAndIndentation();
+                SkipNewlines();
+                // Skip INDENT/DEDENT tokens that may appear before closing bracket due to tokenizer limitations
+                while (Check(TokenType.DEDENT) || Check(TokenType.INDENT)) Advance();
+                SkipNewlines();
                 if (Check(TokenType.RBRACKET))
                     break;
                 elements.Add(ParseTernary());  // Use ParseTernary to avoid tuple parsing
             }
-            SkipNewlinesAndIndentation();
+            SkipNewlines();
+            // Skip any INDENT/DEDENT tokens before the closing bracket
+            while (Check(TokenType.DEDENT) || Check(TokenType.INDENT)) Advance();
+            SkipNewlines();
             Consume(TokenType.RBRACKET, "Expected ']'");
             return new ListLiteral(elements);
         }
 
         if (Match(TokenType.LBRACE))
         {
-            SkipNewlinesAndIndentation();
+            SkipNewlines();
+            // Skip any DEDENT tokens before content
+            while (Check(TokenType.DEDENT)) Advance();
+            SkipNewlines();
             
             // Empty dict
             if (Check(TokenType.RBRACE))
@@ -1319,11 +1782,17 @@ internal class PythonParser
             
             // Parse first key
             var firstKey = ParseTernary();
-            SkipNewlinesAndIndentation();
+            SkipNewlines();
+            while (Check(TokenType.DEDENT)) Advance();
+            SkipNewlines();
             Consume(TokenType.COLON, "Expected ':' in dictionary");
-            SkipNewlinesAndIndentation();
+            SkipNewlines();
+            while (Check(TokenType.DEDENT)) Advance();
+            SkipNewlines();
             var firstValue = ParseTernary();
-            SkipNewlinesAndIndentation();
+            SkipNewlines();
+            while (Check(TokenType.DEDENT)) Advance();
+            SkipNewlines();
             
             // Check for dictionary comprehension: {k:v for k,v in ...}
             if (Check(TokenType.KEYWORD) && Peek().Value == "for")
@@ -1358,7 +1827,9 @@ internal class PythonParser
                     filterCondition = ParseOrExpression();
                 }
                 
-                SkipNewlinesAndIndentation();
+                SkipNewlines();
+                while (Check(TokenType.DEDENT)) Advance();
+                SkipNewlines();
                 Consume(TokenType.RBRACE, "Expected '}'");
                 
                 // Use comma-joined loop vars as the loop variable name
@@ -1370,18 +1841,28 @@ internal class PythonParser
             var items = new List<(Expr, Expr)> { (firstKey, firstValue) };
             while (Match(TokenType.COMMA))
             {
-                SkipNewlinesAndIndentation();
+                SkipNewlines();
+                while (Check(TokenType.DEDENT)) Advance();
+                SkipNewlines();
                 if (Check(TokenType.RBRACE))
                     break;
                 var key = ParseTernary();
-                SkipNewlinesAndIndentation();
+                SkipNewlines();
+                while (Check(TokenType.DEDENT)) Advance();
+                SkipNewlines();
                 Consume(TokenType.COLON, "Expected ':' in dictionary literal");
-                SkipNewlinesAndIndentation();
+                SkipNewlines();
+                while (Check(TokenType.DEDENT)) Advance();
+                SkipNewlines();
                 var value = ParseTernary();
-                SkipNewlinesAndIndentation();
+                SkipNewlines();
+                while (Check(TokenType.DEDENT)) Advance();
+                SkipNewlines();
                 items.Add((key, value));
             }
-            SkipNewlinesAndIndentation();
+            SkipNewlines();
+            while (Check(TokenType.DEDENT)) Advance();
+            SkipNewlines();
             Consume(TokenType.RBRACE, "Expected '}'");
             return new DictLiteral(items);
         }
@@ -1392,12 +1873,51 @@ internal class PythonParser
     private List<Expr> ParseArguments()
     {
         var args = new List<Expr>();
+        SkipNewlines();
+        // Skip INDENT/DEDENT tokens that may appear due to tokenizer limitations
+        while (Check(TokenType.INDENT) || Check(TokenType.DEDENT)) Advance();
+        SkipNewlines();
         if (!Check(TokenType.RPAREN))
         {
             do
             {
-                args.Add(ParseTernary());  // Use ParseTernary to avoid tuple parsing
+                SkipNewlines();
+                while (Check(TokenType.INDENT) || Check(TokenType.DEDENT)) Advance();
+                SkipNewlines();
+                
+                // Check if this is a keyword argument (identifier followed by =)
+                if (Check(TokenType.IDENTIFIER))
+                {
+                    var pos = _current;
+                    var name = Advance().Value;
+                    
+                    // Keyword argument
+                    if (Match(TokenType.EQUALS))
+                    {
+                        var value = ParseTernary();
+                        // Store keyword arg as a variable assignment expression for now
+                        // (We'll treat it as a special expression)
+                        args.Add(new Variable(name + "=" + (value as Variable)?.Name ?? value.ToString()));
+                    }
+                    else
+                    {
+                        // Not a keyword arg, restore position
+                        _current = pos;
+                        args.Add(ParseTernary());
+                    }
+                }
+                else
+                {
+                    args.Add(ParseTernary());  // Use ParseTernary to avoid tuple parsing
+                }
+                
+                SkipNewlines();
+                while (Check(TokenType.INDENT) || Check(TokenType.DEDENT)) Advance();
+                SkipNewlines();
             } while (Match(TokenType.COMMA));
+            SkipNewlines();
+            while (Check(TokenType.INDENT) || Check(TokenType.DEDENT)) Advance();
+            SkipNewlines();
         }
         return args;
     }
@@ -1410,7 +1930,10 @@ internal class PythonParser
     private void SkipNewlinesAndIndentation()
     {
         // Skip newlines and indentation tokens (used inside brackets/braces/parens)
-        while (Match(TokenType.NEWLINE, TokenType.INDENT, TokenType.DEDENT)) { }
+        // WARNING: This should only be used in contexts where we're sure DEDENT tokens won't
+        // mark important structural boundaries. Since we generate DEDENT tokens even inside
+        // brackets, this can cause issues. Consider limiting its use.
+        while (Match(TokenType.NEWLINE, TokenType.INDENT)) { }
     }
 
     private bool Match(params TokenType[] types)
