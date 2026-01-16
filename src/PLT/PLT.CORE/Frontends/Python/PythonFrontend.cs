@@ -322,11 +322,21 @@ internal class PythonParser
     {
         SkipNewlines();
 
+        // Skip decorators
+        if (Check(TokenType.IDENTIFIER) && Peek().Value == "@")
+        {
+            SkipDecorator();
+            return ParseStatement(); // Parse the next statement (function/class)
+        }
+
         if (Check(TokenType.KEYWORD))
         {
             var keyword = Peek().Value;
             return keyword switch
             {
+                "import" => ParseImportStatement(),
+                "from" => ParseFromImportStatement(),
+                "return" => ParseReturnStatement(),
                 "if" => ParseIfStatement(),
                 "for" => ParseForStatement(),
                 "while" => ParseWhileStatement(),
@@ -341,6 +351,50 @@ internal class PythonParser
         }
 
         return ParseExpressionStatement();
+    }
+
+    private void SkipDecorator()
+    {
+        // Skip @ and decorator name/call
+        while (!Check(TokenType.NEWLINE) && !IsAtEnd())
+            Advance();
+        if (Match(TokenType.NEWLINE)) { }
+    }
+
+    private Stmt ParseImportStatement()
+    {
+        Consume(TokenType.KEYWORD, "Expected 'import'");
+        // Skip the entire import line
+        while (!Check(TokenType.NEWLINE) && !IsAtEnd())
+            Advance();
+        SkipNewlines();
+        return null!; // Return empty statement
+    }
+
+    private Stmt ParseFromImportStatement()
+    {
+        Consume(TokenType.KEYWORD, "Expected 'from'");
+        // Skip the entire from...import line
+        while (!Check(TokenType.NEWLINE) && !IsAtEnd())
+            Advance();
+        SkipNewlines();
+        return null!; // Return empty statement
+    }
+
+    private Stmt ParseReturnStatement()
+    {
+        Consume(TokenType.KEYWORD, "Expected 'return'");
+        
+        // Check if there's a value to return
+        if (Check(TokenType.NEWLINE) || IsAtEnd())
+        {
+            SkipNewlines();
+            return new ExprStmt(new Literal(null)); // Return None
+        }
+
+        var value = ParseExpression();
+        SkipNewlines();
+        return new ExprStmt(value); // Treat return as expression statement
     }
 
     private Stmt ParseExpressionStatement()
