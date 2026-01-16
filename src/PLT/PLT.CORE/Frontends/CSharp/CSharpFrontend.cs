@@ -329,37 +329,137 @@ internal class CSharpParser
 
         while (!IsAtEnd())
         {
-            if (IsAtEnd()) break;
-
-            // Skip using statements and namespaces
-            if (Check(TokenType.KEYWORD) && (Peek().Value == "using" || Peek().Value == "namespace"))
+            // Skip using statements
+            if (Check(TokenType.KEYWORD) && Peek().Value == "using")
             {
                 SkipUsingOrNamespace();
                 SkipNewlines();
                 continue;
             }
 
+            // Handle class/struct definitions - extract statements from inside
+            if (Check(TokenType.KEYWORD) && (Peek().Value == "class" || Peek().Value == "struct"))
+            {
+                ExtractStatementsFromClassOrStruct(statements);
+                SkipNewlines();
+                continue;
+            }
+
             var stmt = ParseStatement();
-            if (stmt != null) statements.Add(stmt);
+            if (stmt != null) 
+            {
+                statements.Add(stmt);
+            }
             SkipNewlines();
         }
 
         return new IrProgram(statements);
     }
 
+    private void ExtractStatementsFromClassOrStruct(List<Stmt> statements)
+    {
+        // Skip class/struct definition until we find {
+        while (!Check(TokenType.LBRACE) && !IsAtEnd())
+            Advance();
+        
+        if (!Match(TokenType.LBRACE))
+            return;
+
+        // Now we're inside the class body
+        // Look for method definitions and extract their body statements
+        int braceDepth = 1;
+        while (braceDepth > 0 && !IsAtEnd())
+        {
+            SkipNewlines();
+
+            if (Check(TokenType.RBRACE))
+            {
+                Advance();
+                braceDepth--;
+                continue;
+            }
+
+            // Skip modifiers and method signatures
+            while (Check(TokenType.KEYWORD) && (Peek().Value == "public" || Peek().Value == "private" || Peek().Value == "static" || Peek().Value == "void"))
+            {
+                Advance();
+            }
+
+            // Skip method name and parameters
+            if (Check(TokenType.IDENTIFIER))
+            {
+                Advance(); // method name
+                
+                // Skip to opening paren and consume method parameters
+                while (!Check(TokenType.LPAREN) && !IsAtEnd())
+                    Advance();
+                
+                if (Match(TokenType.LPAREN))
+                {
+                    // Skip parameters
+                    int parenDepth = 1;
+                    while (parenDepth > 0 && !IsAtEnd())
+                    {
+                        if (Check(TokenType.LPAREN)) parenDepth++;
+                        else if (Check(TokenType.RPAREN)) parenDepth--;
+                        Advance();
+                    }
+                }
+
+                SkipNewlines();
+
+                // Now should be at the method body {
+                if (Match(TokenType.LBRACE))
+                {
+                    // Parse the method body
+                    int methodBraceDepth = 1;
+                    while (methodBraceDepth > 0 && !IsAtEnd())
+                    {
+                        SkipNewlines();
+                        if (Check(TokenType.RBRACE))
+                        {
+                            Advance();
+                            methodBraceDepth--;
+                        }
+                        else if (Check(TokenType.LBRACE))
+                        {
+                            Advance();
+                            methodBraceDepth++;
+                        }
+                        else
+                        {
+                            var stmt = ParseStatement();
+                            if (stmt != null) statements.Add(stmt);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                Advance(); // skip unknown token
+            }
+        }
+    }
+
     private void SkipUsingOrNamespace()
     {
+        // Skip to either semicolon (for using) or opening brace (for namespace/class)
         while (!Check(TokenType.SEMICOLON) && !Check(TokenType.LBRACE) && !IsAtEnd())
             Advance();
-        if (Match(TokenType.SEMICOLON)) { }
+        
+        if (Match(TokenType.SEMICOLON)) 
+        { 
+            return; 
+        }
+        
         if (Check(TokenType.LBRACE))
         {
-            Advance();
+            Advance(); // consume {
             int braceCount = 1;
             while (braceCount > 0 && !IsAtEnd())
             {
-                if (Match(TokenType.LBRACE)) braceCount++;
-                else if (Match(TokenType.RBRACE)) braceCount--;
+                if (Check(TokenType.LBRACE)) { Advance(); braceCount++; }
+                else if (Check(TokenType.RBRACE)) { Advance(); braceCount--; }
                 else Advance();
             }
         }
@@ -368,12 +468,6 @@ internal class CSharpParser
     private Stmt? ParseStatement()
     {
         SkipNewlines();
-
-        // Skip class/struct definitions
-        if (Check(TokenType.KEYWORD) && (Peek().Value == "class" || Peek().Value == "struct" || Peek().Value == "public" || Peek().Value == "private" || Peek().Value == "protected"))
-        {
-            return SkipClassOrMethod();
-        }
 
         // Check for closing brace - end of block
         if (Check(TokenType.RBRACE))
@@ -384,6 +478,24 @@ internal class CSharpParser
         if (Check(TokenType.KEYWORD))
         {
             var keyword = Peek().Value;
+            
+            // Skip modifiers, namespaces, classes
+            if (keyword == "namespace" || keyword == "class" || keyword == "struct" 
+                || keyword == "public" || keyword == "private" || keyword == "protected" 
+                || keyword == "static" || keyword == "using")
+            {
+                SkipUntilSemicolonOrBrace();
+                return null;
+            }
+            
+            // Skip control flow statements
+            if (keyword == "return" || keyword == "break" || keyword == "continue")
+            {
+                Advance();
+                ConsumeSemicolonIfPresent();
+                return null;
+            }
+            
             return keyword switch
             {
                 "if" => ParseIfStatement(),
@@ -395,42 +507,58 @@ internal class CSharpParser
             };
         }
 
-        if (Check(TokenType.IDENTIFIER))
-        {
-            // Look ahead for = or . or (
-            var next = PeekNext();
-            if (next?.Type == TokenType.EQUALS)
-            {
-                return ParseSimpleAssignment();
-            }
-            // Otherwise it's an expression (function call, method call, etc.)
-        }
-
-        if (Check(TokenType.LBRACE))
-        {
-            return null; // Don't try to parse closing braces
-        }
-
         return ParseExpressionStatement();
     }
 
-    private Stmt? SkipClassOrMethod()
+    private void SkipUntilSemicolonOrBrace()
     {
-        while (!Check(TokenType.LBRACE) && !IsAtEnd())
+        // Skip everything until we hit a semicolon or opening brace
+        int depth = 0;
+        while (!IsAtEnd())
+        {
+            if (Check(TokenType.SEMICOLON) && depth == 0)
+            {
+                Advance();
+                return;
+            }
+            if (Check(TokenType.LBRACE))
+            {
+                Advance();
+                // Now skip the entire block
+                depth = 1;
+                while (depth > 0 && !IsAtEnd())
+                {
+                    if (Check(TokenType.LBRACE)) depth++;
+                    else if (Check(TokenType.RBRACE)) depth--;
+                    Advance();
+                }
+                return;
+            }
+            Advance();
+        }
+    }
+
+    private void SkipClassMethodDef()
+    {
+        // Skip modifiers and type info until we hit { or ;
+        while (!Check(TokenType.LBRACE) && !Check(TokenType.SEMICOLON) && !IsAtEnd())
             Advance();
 
         if (Match(TokenType.LBRACE))
         {
+            // Skip method body
             int braceCount = 1;
             while (braceCount > 0 && !IsAtEnd())
             {
-                if (Match(TokenType.LBRACE)) braceCount++;
-                else if (Match(TokenType.RBRACE)) braceCount--;
+                if (Check(TokenType.LBRACE)) { Advance(); braceCount++; }
+                else if (Check(TokenType.RBRACE)) { Advance(); braceCount--; }
                 else Advance();
             }
         }
-
-        return null;
+        else if (Match(TokenType.SEMICOLON))
+        {
+            // Skip
+        }
     }
 
     private VarAssignment ParseTypedAssignment()
@@ -438,26 +566,20 @@ internal class CSharpParser
         var type = Advance().Value; // consume type
         var varName = Consume(TokenType.IDENTIFIER, "Expected variable name").Value;
         Consume(TokenType.EQUALS, "Expected '='");
-        var value = ParseExpression();
+        var value = ParseOrExpression();
         ConsumeSemicolonIfPresent();
         return new VarAssignment(varName, value);
     }
 
-    private VarAssignment ParseSimpleAssignment()
-    {
-        var varName = Advance().Value;
-        Consume(TokenType.EQUALS, "Expected '='");
-        var value = ParseExpression();
-        ConsumeSemicolonIfPresent();
-        return new VarAssignment(varName, value);
-    }
+
 
     private IfStmt ParseIfStatement()
     {
         Consume(TokenType.KEYWORD, "Expected 'if'");
         Consume(TokenType.LPAREN, "Expected '('");
-        var condition = ParseExpression();
+        var condition = ParseOrExpression();
         Consume(TokenType.RPAREN, "Expected ')'");
+        SkipNewlines();
 
         var thenBody = new List<Stmt>();
         if (Match(TokenType.LBRACE))
@@ -516,7 +638,7 @@ internal class CSharpParser
                 {
                     isForEach = true;
                     Advance(); // consume 'in'
-                    iterExpr = ParseExpression();
+                    iterExpr = ParseOrExpression();
                 }
             }
         }
@@ -535,6 +657,7 @@ internal class CSharpParser
         }
 
         Consume(TokenType.RPAREN, "Expected ')'");
+        SkipNewlines();
 
         var forBody = new List<Stmt>();
         if (Match(TokenType.LBRACE))
@@ -554,8 +677,9 @@ internal class CSharpParser
     {
         Consume(TokenType.KEYWORD, "Expected 'while'");
         Consume(TokenType.LPAREN, "Expected '('");
-        var condition = ParseExpression();
+        var condition = ParseOrExpression();
         Consume(TokenType.RPAREN, "Expected ')'");
+        SkipNewlines();
 
         var body = new List<Stmt>();
         if (Match(TokenType.LBRACE))
@@ -587,7 +711,7 @@ internal class CSharpParser
 
         Consume(TokenType.KEYWORD, "Expected 'while'");
         Consume(TokenType.LPAREN, "Expected '('");
-        var condition = ParseExpression();
+        var condition = ParseOrExpression();
         Consume(TokenType.RPAREN, "Expected ')'");
         ConsumeSemicolonIfPresent();
 
@@ -612,12 +736,35 @@ internal class CSharpParser
 
     private Stmt ParseExpressionStatement()
     {
-        var expr = ParseExpression();
+        // Try to parse as an expression first
+        var startPos = _current;
+        
+        // Try to parse as a simple assignment (var = value)
+        if (Check(TokenType.IDENTIFIER))
+        {
+            var savedPos = _current;
+            var varName = Advance().Value;
+            
+            if (Match(TokenType.EQUALS))
+            {
+                var value = ParseOrExpression();
+                ConsumeSemicolonIfPresent();
+                return new VarAssignment(varName, value);
+            }
+            else
+            {
+                // Not an assignment, restore position
+                _current = savedPos;
+            }
+        }
+        
+        // Regular expression statement
+        var expr = ParseOrExpression();
         ConsumeSemicolonIfPresent();
         return new ExprStmt(expr);
     }
 
-    private Expr ParseExpression()
+    private Expr ParseAssignmentExpression()
     {
         return ParseOrExpression();
     }
@@ -739,7 +886,7 @@ internal class CSharpParser
             }
             else if (Match(TokenType.LBRACKET))
             {
-                var index = ParseExpression();
+                var index = ParseOrExpression();
                 Consume(TokenType.RBRACKET, "Expected ']'");
                 expr = new MethodCall(expr, "__getitem__", new List<Expr> { index });
             }
@@ -782,7 +929,7 @@ internal class CSharpParser
 
         if (Match(TokenType.LPAREN))
         {
-            var expr = ParseExpression();
+            var expr = ParseAssignmentExpression();
             Consume(TokenType.RPAREN, "Expected ')'");
             return expr;
         }
@@ -797,7 +944,7 @@ internal class CSharpParser
         {
             do
             {
-                args.Add(ParseExpression());
+                args.Add(ParseOrExpression());
             } while (Match(TokenType.COMMA));
         }
         return args;
