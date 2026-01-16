@@ -373,6 +373,7 @@ internal class PythonParser
                 "from" => ParseFromImportStatement(),
                 "return" => ParseReturnStatement(),
                 "raise" => ParseRaiseStatement(),
+                "pass" => ParsePassStatement(),
                 "class" => ParseClassDef(),
                 "try" => ParseTryStatement(),
                 "if" => ParseIfStatement(),
@@ -477,15 +478,19 @@ internal class PythonParser
         // Check if there's an exception to raise
         if (Check(TokenType.NEWLINE) || IsAtEnd())
         {
-            SkipNewlines();
             // Re-raise current exception
             return new ExprStmt(new Intrinsic("raise", new List<Expr>()));
         }
 
         var exception = ParseExpression();
-        SkipNewlines();
         // Treat raise as an intrinsic function call: raise(exception)
         return new ExprStmt(new Intrinsic("raise", new List<Expr> { exception }));
+    }
+
+    private Stmt ParsePassStatement()
+    {
+        Consume(TokenType.KEYWORD, "Expected 'pass'");
+        return new PassStmt();
     }
 
     private Stmt ParseTupleUnpacking()
@@ -511,7 +516,6 @@ internal class PythonParser
         Consume(TokenType.EQUALS, "Expected '='");
         
         var value = ParseExpression();
-        SkipNewlines();
         
         return new TupleUnpackingAssignment(varNames, value);
     }
@@ -519,7 +523,6 @@ internal class PythonParser
     private Stmt ParseExpressionStatement()
     {
         var expr = ParseExpression();
-        SkipNewlines();
         return new ExprStmt(expr);
     }
 

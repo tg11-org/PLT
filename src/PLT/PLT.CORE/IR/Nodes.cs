@@ -13,6 +13,8 @@ public record VarAssignment(string VarName, Expr Value, string? LeadingComment =
 
 public record TupleUnpackingAssignment(IReadOnlyList<string> VarNames, Expr Value, string? LeadingComment = null) : Stmt;
 
+public record PassStmt(string? LeadingComment = null) : Stmt;
+
 public record IfStmt(Expr Condition, IReadOnlyList<Stmt> ThenBody, IReadOnlyList<Stmt>? ElseBody = null, string? LeadingComment = null) : Stmt;
 
 public record ForEachStmt(string LoopVar, Expr IterableExpr, IReadOnlyList<Stmt> Body, string? LeadingComment = null) : Stmt;

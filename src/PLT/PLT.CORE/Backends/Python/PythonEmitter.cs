@@ -37,6 +37,12 @@ public sealed class PythonEmitter
                 sb.AppendLine();
                 break;
 
+            case PassStmt p:
+                if (!string.IsNullOrWhiteSpace(p.LeadingComment))
+                    sb.AppendLine($"{pad}# {p.LeadingComment}");
+                sb.AppendLine($"{pad}pass");
+                break;
+
             case TupleUnpackingAssignment t:
                 if (!string.IsNullOrWhiteSpace(t.LeadingComment))
                     sb.AppendLine($"{pad}# {t.LeadingComment}");
