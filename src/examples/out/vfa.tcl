@@ -216,12 +216,12 @@ set ET_DIR 1
 set ET_SYMLINK 2
 set ET_HARDLINK 3
 # Class FileEntry
-set blocks field $default_factory=list
+set blocks [list]
 set start_off 0
 set entry_type $ET_FILE
 set meta_json ""
 # Class TOC
-set entries field $default_factory=list
+set entries [list]
 proc pack {self solid} {
     set out ::BytesIO $io
     ::write $out ::pack $struct "<I" len ::entries $self

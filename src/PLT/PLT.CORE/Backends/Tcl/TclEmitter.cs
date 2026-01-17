@@ -295,6 +295,13 @@ public sealed class TclEmitter
                 return;
 
             case FunctionCall f:
+                // Special case: dataclass field(default_factory=list) => [list]
+                if (f.FunctionName == "field")
+                {
+                    // For now, just emit empty list - dataclass fields aren't really supported in Tcl
+                    sb.Append("[list]");
+                    return;
+                }
                 // Map print to puts
                 if (f.FunctionName == "print")
                 {

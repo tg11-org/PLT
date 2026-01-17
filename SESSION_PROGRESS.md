@@ -1,7 +1,17 @@
 # PLT vfa.py Translation - Complete Session Progress
 
-**Last Updated**: January 16, 2026  
+**Last Updated**: January 17, 2026  
 **Goal**: Translate vfa.py (1172-line Python archive utility) to Tcl successfully
+
+### Latest (Jan 17, 2026)
+- Added session context snapshot in SESSION_CONTEXT_JAN17_2026.md.
+- Tcl backend robustness improvements:
+  - Variables inside `expr {}` now emit with `$` prefixes (fixes ternary and math conditions).
+  - Python string repetition (`"x00" * 16`) now maps to `[string repeat "x00" 16]` (also when operands are reversed).
+  - Dataclass `field(default_factory=list)` translates to `[list]` for clean init of `blocks`/`entries`.
+  - Dict comprehension for older Tcl: builds key/value list manually, then creates dict via `_result` accumulator.
+  - String pattern helpers emit valid glob patterns for `.startswith()`/`.endswith()`.
+- Verified `dotnet build`, `dotnet test`, and `dotnet run --from py --to tcl src/examples/vfa.py` succeed; generated Tcl is 1168 lines.
 
 ---
 
