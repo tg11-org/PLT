@@ -148,3 +148,7 @@ It *is* meant to explore how translation works when treated as a compiler proble
 🚧 Actively developed
 ⚠️ Not production-ready
 🧠 Built for learning, experimentation, and fun
+
+---
+
+# This is an experiment being create by the GitHub workspaces AI to see how capable and effective it is.
